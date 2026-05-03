@@ -1,14 +1,18 @@
 import { useState } from 'react'
-import { Outlet, useNavigate } from 'react-router-dom'
-import { Menu } from 'lucide-react'
+import { Outlet, useLocation, useNavigate } from 'react-router-dom'
+import { Menu, MessageCircle, X } from 'lucide-react'
 import Sidebar from './Sidebar'
 import PWAInstallPrompt from '../ui/PWAInstallPrompt'
+import { ChatPanel } from '../chat/ChatPanel'
 // NotificationBell moved to per-screen placement to avoid duplicate icons
 import { useScrumReminderNotification } from '../../hooks/useScrumReminderNotification'
 
 export default function AppLayout() {
   const navigate = useNavigate()
+  const location = useLocation()
   const [sidebarOpen, setSidebarOpen] = useState(false)
+  const [chatOpen,    setChatOpen]    = useState(false)
+  const showDashboardChat = location.pathname === '/'
   useScrumReminderNotification(() => navigate('/mark'))
 
   return (
@@ -58,6 +62,38 @@ export default function AppLayout() {
       </div>
 
       <PWAInstallPrompt />
+
+      {/* ── Floating AI Chat button ─────────────────────────────────── */}
+      {showDashboardChat && (
+        <>
+          <button
+            onClick={() => setChatOpen(o => !o)}
+            title={chatOpen ? 'Close AI Assistant' : 'Open AI Assistant'}
+            className="
+              fixed bottom-5 right-5 z-50
+              w-13 h-13 flex items-center justify-center
+              bg-gradient-to-br from-indigo-500 to-purple-600
+              hover:from-indigo-600 hover:to-purple-700
+              text-white rounded-2xl shadow-lg hover:shadow-xl
+              transition-all duration-200 active:scale-95
+              md:bottom-5 md:right-5
+            "
+            style={{ width: '52px', height: '52px' }}
+          >
+            {chatOpen
+              ? <X className="w-5 h-5" />
+              : <MessageCircle className="w-5 h-5" />}
+
+            {/* Pulse ring when closed */}
+            {!chatOpen && (
+              <span className="absolute inset-0 rounded-2xl animate-ping bg-indigo-400 opacity-30 pointer-events-none" />
+            )}
+          </button>
+
+          {/* ── Chat drawer ────────────────────────────────────────────── */}
+          <ChatPanel open={chatOpen} onClose={() => setChatOpen(false)} />
+        </>
+      )}
     </div>
   )
 }

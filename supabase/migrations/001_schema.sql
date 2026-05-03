@@ -235,3 +235,177 @@ insert into project_memberships (project_id, user_name, user_email, role)
 select id, 'Admin', 'ashu33031@gmail.com', 'owner_pmo'
 from   projects
 on conflict (project_id, user_email) do update set role = 'owner_pmo';
+
+-- ── Chat History (Gemini AI Assistant) ────────────────────────────────────────
+-- Conversations and messages for the in-app AI chat.
+
+create table if not exists chat_conversations (
+  id          uuid        primary key default gen_random_uuid(),
+  user_id     uuid        references auth.users(id) on delete cascade,
+  title       text,                        -- auto-generated from first message
+  created_at  timestamptz not null default now(),
+  updated_at  timestamptz not null default now()
+);
+
+create table if not exists chat_messages (
+  id              uuid        primary key default gen_random_uuid(),
+  conversation_id uuid        not null references chat_conversations(id) on delete cascade,
+  user_id         uuid        references auth.users(id) on delete set null,
+  role            text        not null check (role in ('user', 'assistant', 'system')),
+  content         text        not null,
+  created_at      timestamptz not null default now()
+);
+
+-- Indexes for fast per-user and per-conversation lookups
+create index if not exists idx_chat_conv_user     on chat_conversations(user_id);
+create index if not exists idx_chat_msg_conv      on chat_messages(conversation_id);
+create index if not exists idx_chat_msg_created   on chat_messages(conversation_id, created_at);
+
+-- Auto-update updated_at on conversations when new messages arrive
+create or replace function update_conversation_timestamp()
+returns trigger language plpgsql as $$
+begin
+  update chat_conversations set updated_at = now() where id = new.conversation_id;
+  return new;
+end;
+$$;
+
+drop trigger if exists trg_chat_msg_update_conv on chat_messages;
+create trigger trg_chat_msg_update_conv
+  after insert on chat_messages
+  for each row execute function update_conversation_timestamp();
+
+-- Row-level security: Users can only see their own conversations and messages
+alter table chat_conversations enable row level security;
+alter table chat_messages      enable row level security;
+
+drop policy if exists "chat_own_conversations" on chat_conversations;
+drop policy if exists "chat_own_messages"      on chat_messages;
+
+-- Users can only see their own conversations
+create policy "chat_own_conversations" on chat_conversations
+  for all using (auth.uid() = user_id);
+
+-- Users can only see messages in their own conversations
+create policy "chat_own_messages" on chat_messages
+  for all using (
+    conversation_id in (
+      select id from chat_conversations where user_id = auth.uid()
+    )
+  );
+-- ── Blockers ──────────────────────────────────────────────────────────────────
+create table if not exists blockers (
+  id                  uuid        primary key default gen_random_uuid(),
+  project_id          uuid        not null references projects(id) on delete cascade,
+  attendee_id         uuid        not null references attendees(id) on delete cascade,
+  reported_date       date        not null,
+  reported_by         text        not null,  -- user email
+  description         text        not null default '',
+  severity            text        not null default 'high'
+                                  check (severity in ('critical', 'high', 'medium', 'low')),
+  status              text        not null default 'open'
+                                  check (status in ('open', 'in_progress', 'resolved')),
+  resolved_date       date,
+  resolved_by         text,
+  related_data        jsonb,
+  notes               text        not null default '',
+  created_at          timestamptz not null default now(),
+  updated_at          timestamptz not null default now()
+);
+
+-- Indexes for fast queries
+create index if not exists idx_blockers_project    on blockers(project_id);
+create index if not exists idx_blockers_attendee   on blockers(attendee_id);
+create index if not exists idx_blockers_status     on blockers(status);
+create index if not exists idx_blockers_severity   on blockers(severity);
+create index if not exists idx_blockers_date       on blockers(reported_date);
+create index if not exists idx_blockers_created    on blockers(created_at desc);
+
+-- RLS
+alter table blockers enable row level security;
+
+-- ── Scrum Session History ────────────────────────────────────────────────────
+-- Tracks each scrum session (start and end times) for reporting and future defaults
+create table if not exists scrum_sessions (
+  id              uuid        primary key default gen_random_uuid(),
+  project_id      uuid        not null references projects(id) on delete cascade,
+  session_date    date        not null,
+  scrum_start_time text      not null,  -- "HH:MM" format
+  scrum_end_time  text        not null,  -- "HH:MM" format
+  duration_minutes integer    not null default 0,
+  attendees_marked integer    not null default 0,
+  created_at      timestamptz not null default now(),
+  unique (project_id, session_date)
+);
+
+-- ── Attendance Rules (Project-level defaults) ────────────────────────────────
+-- Stores default scrum time and rules for each project
+create table if not exists attendance_rules (
+  id              uuid        primary key default gen_random_uuid(),
+  project_id      uuid        not null unique references projects(id) on delete cascade,
+  default_scrum_start_time text not null,  -- "HH:MM" format (e.g., "10:00")
+  default_scrum_end_time   text not null,  -- "HH:MM" format (e.g., "10:30")
+  grace_period_minutes    integer not null default 5,
+  late_threshold_minutes  integer not null default 0,
+  auto_mark_absent_after  integer,  -- minutes after scrum start, null = never
+  working_days            text    not null default 'mon,tue,wed,thu,fri', -- comma-separated
+  timezone                text    not null default 'Asia/Kolkata',
+  created_at              timestamptz not null default now(),
+  updated_at              timestamptz not null default now()
+);
+
+-- ── Enable RLS ────────────────────────────────────────────────────────────────
+alter table scrum_sessions    enable row level security;
+alter table attendance_rules  enable row level security;
+
+-- ── RLS Policies ──────────────────────────────────────────────────────────────
+-- All authenticated users can read
+create policy "auth_read_scrum_sessions"   on scrum_sessions   for select to authenticated using (true);
+create policy "auth_read_attendance_rules" on attendance_rules for select to authenticated using (true);
+
+-- All authenticated users can write
+create policy "auth_write_scrum_sessions"   on scrum_sessions   for all to authenticated using (true) with check (true);
+create policy "auth_write_attendance_rules" on attendance_rules for all to authenticated using (true) with check (true);
+
+-- ── Indexes ───────────────────────────────────────────────────────────────────
+create index if not exists idx_scrum_sessions_project on scrum_sessions(project_id);
+create index if not exists idx_scrum_sessions_date    on scrum_sessions(session_date);
+create index if not exists idx_attendance_rules_project on attendance_rules(project_id);
+
+-- ── Bootstrap Attendance Rules ────────────────────────────────────────────────
+-- Initializes default attendance rules for all existing projects.
+-- Uses project's scrum_time as the default start time, with 30-min duration.
+-- Safe to re-run (INSERT ... ON CONFLICT DO NOTHING).
+--
+-- This ensures every project has attendance rules configured from the start.
+-- Formula: End time = Start time + 30 minutes
+-- Example: If scrum_time = "10:00", end_time = "10:30"
+--
+-- NOTE: This query runs AFTER projects are created. Manually adjust end times
+-- if your projects have different scrum durations (e.g., 45 mins, 1 hour, etc.)
+insert into attendance_rules (
+  project_id,
+  default_scrum_start_time,
+  default_scrum_end_time,
+  grace_period_minutes,
+  late_threshold_minutes,
+  working_days,
+  timezone
+)
+select
+  p.id,
+  p.scrum_time as default_scrum_start_time,
+  case
+    when p.scrum_time like '__:00' then LPAD((CAST(SUBSTRING(p.scrum_time, 1, 2) as integer) * 60 + 30) / 60 || '', 2, '0') || ':30'
+    when p.scrum_time like '__:15' then LPAD((CAST(SUBSTRING(p.scrum_time, 1, 2) as integer) * 60 + 45) / 60 || '', 2, '0') || ':45'
+    when p.scrum_time like '__:30' then LPAD((CAST(SUBSTRING(p.scrum_time, 1, 2) as integer) * 60 + 60) / 60 || '', 2, '0') || ':00'
+    when p.scrum_time like '__:45' then LPAD((CAST(SUBSTRING(p.scrum_time, 1, 2) as integer) * 60 + 75) / 60 || '', 2, '0') || ':15'
+    else '10:30'
+  end as default_scrum_end_time,
+  p.late_grace_minutes,
+  0,
+  'mon,tue,wed,thu,fri',
+  p.scrum_timezone
+from projects p
+where p.status = 'active'
+on conflict (project_id) do nothing;

@@ -269,6 +269,106 @@ export interface Database {
         Update: Partial<Database['public']['Tables']['notification_settings']['Insert']>
         Relationships: []
       }
+
+      blockers: {
+        Row: {
+          id:            string
+          project_id:    string
+          attendee_id:   string
+          reported_date: string
+          reported_by:   string
+          description:   string
+          severity:      'critical' | 'high' | 'medium' | 'low'
+          status:        'open' | 'in_progress' | 'resolved'
+          resolved_date: string | null
+          resolved_by:   string | null
+          related_data:  Record<string, unknown> | null
+          notes:         string
+          created_at:    string
+          updated_at:    string
+        }
+        Insert: {
+          id?:            string
+          project_id:     string
+          attendee_id:    string
+          reported_date:  string
+          reported_by:    string
+          description?:   string
+          severity?:      'critical' | 'high' | 'medium' | 'low'
+          status?:        'open' | 'in_progress' | 'resolved'
+          resolved_date?: string | null
+          resolved_by?:   string | null
+          related_data?:  Record<string, unknown> | null
+          notes?:         string
+          created_at?:    string
+          updated_at?:    string
+        }
+        Update: Partial<Database['public']['Tables']['blockers']['Insert']>
+        Relationships: [
+          { foreignKeyName: 'blockers_project_id_fkey'; columns: ['project_id']; referencedRelation: 'projects'; referencedColumns: ['id'] },
+          { foreignKeyName: 'blockers_attendee_id_fkey'; columns: ['attendee_id']; referencedRelation: 'attendees'; referencedColumns: ['id'] }
+        ]
+      }
+
+      scrum_sessions: {
+        Row: {
+          id:               string
+          project_id:       string
+          session_date:     string
+          scrum_start_time: string
+          scrum_end_time:   string
+          duration_minutes: number
+          attendees_marked: number
+          created_at:       string
+        }
+        Insert: {
+          id?:              string
+          project_id:       string
+          session_date:     string
+          scrum_start_time: string
+          scrum_end_time:   string
+          duration_minutes?: number
+          attendees_marked?: number
+          created_at?:      string
+        }
+        Update: Partial<Database['public']['Tables']['scrum_sessions']['Insert']>
+        Relationships: [
+          { foreignKeyName: 'scrum_sessions_project_id_fkey'; columns: ['project_id']; referencedRelation: 'projects'; referencedColumns: ['id'] }
+        ]
+      }
+
+      attendance_rules: {
+        Row: {
+          id:                      string
+          project_id:              string
+          default_scrum_start_time: string
+          default_scrum_end_time:   string
+          grace_period_minutes:    number
+          late_threshold_minutes:  number
+          auto_mark_absent_after:  number | null
+          working_days:            string
+          timezone:                string
+          created_at:              string
+          updated_at:              string
+        }
+        Insert: {
+          id?:                     string
+          project_id:              string
+          default_scrum_start_time: string
+          default_scrum_end_time:   string
+          grace_period_minutes?:   number
+          late_threshold_minutes?:  number
+          auto_mark_absent_after?:  number | null
+          working_days?:           string
+          timezone?:               string
+          created_at?:             string
+          updated_at?:             string
+        }
+        Update: Partial<Database['public']['Tables']['attendance_rules']['Insert']>
+        Relationships: [
+          { foreignKeyName: 'attendance_rules_project_id_fkey'; columns: ['project_id']; referencedRelation: 'projects'; referencedColumns: ['id'] }
+        ]
+      }
     }
     Views:   Record<string, never>
     Functions: Record<string, never>
@@ -288,3 +388,6 @@ export type UserMPINRow              = Database['public']['Tables']['user_mpins'
 export type UserProfileRow           = Database['public']['Tables']['user_profiles']['Row']
 export type NotificationRow          = Database['public']['Tables']['notifications']['Row']
 export type NotificationSettingsRow  = Database['public']['Tables']['notification_settings']['Row']
+export type BlockerRow               = Database['public']['Tables']['blockers']['Row']
+export type ScrumSessionRow          = Database['public']['Tables']['scrum_sessions']['Row']
+export type AttendanceRuleRow        = Database['public']['Tables']['attendance_rules']['Row']

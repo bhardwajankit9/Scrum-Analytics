@@ -7,12 +7,12 @@ import { SelectDropdown } from '../components/ui/SelectDropdown'
 import { DatePickerPopover } from '../components/ui/DatePickerPopover'
 import { supabase } from '../lib/supabase/client'
 
-type Tab = 'rules' | 'holidays' | 'roles' | 'notifications' | 'integrations'
+type Tab = 'rules' | 'roles' | 'notifications' | 'integrations'
 
 export default function SystemSettingsScreen() {
   const [searchParams] = useSearchParams()
   const tabParam = searchParams.get('tab') as Tab | null
-  const VALID_TABS: Tab[] = ['rules', 'holidays', 'roles', 'notifications', 'integrations']
+  const VALID_TABS: Tab[] = ['rules', 'roles', 'notifications', 'integrations']
   const [activeTab, setActiveTab] = useState<Tab>(
     tabParam && VALID_TABS.includes(tabParam) ? tabParam : 'rules'
   )
@@ -21,7 +21,6 @@ export default function SystemSettingsScreen() {
 
   const tabs: { id: Tab; label: string; icon: React.ReactNode }[] = [
     { id: 'rules',         label: 'Attendance Rules',   icon: <Settings className="w-4 h-4" /> },
-    { id: 'holidays',      label: 'Holidays & Leave',   icon: <Calendar className="w-4 h-4" /> },
     { id: 'roles',         label: 'Roles & Permissions', icon: <Shield className="w-4 h-4" /> },
     { id: 'notifications', label: 'Notifications',      icon: <BellIcon className="w-4 h-4" /> },
     { id: 'integrations',  label: 'Integrations',       icon: <Plug className="w-4 h-4" /> },
@@ -59,7 +58,6 @@ export default function SystemSettingsScreen() {
         {/* Content */}
         <div className="flex-1">
           {activeTab === 'rules'         && <RulesTab projects={projects} />}
-          {activeTab === 'holidays'      && <HolidaysTab projects={projects} attendees={attendees} holidays={holidays} leaves={leaves} addHoliday={addHoliday} deleteHoliday={deleteHoliday} addLeave={addLeave} deleteLeave={deleteLeave} canEdit={perms.canManageHolidays} />}
           {activeTab === 'roles'         && <RolesTab projects={projects} attendees={attendees} memberships={memberships} addMembership={addMembership} deleteMembership={deleteMembership} canEdit={perms.canManageMembers} />}
           {activeTab === 'notifications' && <NotificationsTab />}
           {activeTab === 'integrations'  && <IntegrationsTab />}
@@ -106,123 +104,6 @@ function RulesTab({ projects }: { projects: import('../data/mockData').Project[]
           className="px-6 py-2.5 bg-gray-900 text-white rounded-xl text-sm font-semibold hover:bg-gray-800 transition-colors">
           Save Rules
         </button>
-      </div>
-    </div>
-  )
-}
-
-// ─── Holidays Tab ─────────────────────────────────────────────────────────────
-
-function HolidaysTab({ projects, attendees, holidays, leaves, addHoliday, deleteHoliday, addLeave, deleteLeave, canEdit }: {
-  projects:    import('../domain/entities').Project[]
-  attendees:   import('../domain/entities').Attendee[]
-  holidays:    import('../domain/entities').Holiday[]
-  leaves:      import('../domain/entities').Leave[]
-  addHoliday:  (h: Omit<import('../domain/entities').Holiday, 'id'>) => void
-  deleteHoliday:(id: string) => void
-  addLeave:    (l: Omit<import('../domain/entities').Leave, 'id' | 'created_at'>) => void
-  deleteLeave: (id: string) => void
-  canEdit:     boolean
-}) {
-  const [hForm, setHForm] = useState({ project_id: projects[0]?.id ?? '', holiday_date: '', name: '' })
-  const [lForm, setLForm] = useState({ project_id: projects[0]?.id ?? '', attendee_id: '', start_date: '', end_date: '', reason: '' })
-
-  const projectAttendees = attendees.filter(a => a.project === projects.find(p => p.id === lForm.project_id)?.name)
-
-  return (
-    <div className="space-y-6">
-      {/* Holidays */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-        <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2"><Calendar className="w-4 h-4" /> Public Holidays</h3>
-        <div className="grid grid-cols-3 gap-3 mb-4">
-          <SelectDropdown
-            value={hForm.project_id}
-            onChange={v => setHForm(p => ({...p, project_id: v}))}
-            options={projects.map(p => ({ value: p.id, label: p.name }))}
-            className="w-full"
-          />
-          <DatePickerPopover value={hForm.holiday_date} onChange={v => setHForm(p => ({...p, holiday_date: v}))} fullWidth placeholder="Holiday date" />
-          <div className="flex gap-2">
-            <input value={hForm.name} onChange={e => setHForm(p => ({...p, name: e.target.value}))}
-              placeholder="Holiday name"
-              className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900" />
-            <button onClick={() => { if (hForm.holiday_date && hForm.name) { addHoliday(hForm); setHForm(p => ({...p, holiday_date: '', name: ''})) } }}
-              disabled={!canEdit}
-              className="px-3 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed">
-              <Plus className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-        <div className="space-y-2">
-          {holidays.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No holidays added yet.</p>}
-          {holidays.map(h => {
-            const proj = projects.find(p => p.id === h.project_id)
-            return (
-              <div key={h.id} className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-lg">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{h.name}</p>
-                  <p className="text-xs text-gray-400">{proj?.name} · {new Date(h.holiday_date + 'T00:00').toLocaleDateString('en-US', { weekday: 'short', month: 'short', day: 'numeric', year: 'numeric' })}</p>
-                </div>
-                <button onClick={() => deleteHoliday(h.id)} disabled={!canEdit} className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            )
-          })}
-        </div>
-      </div>
-
-      {/* Leaves */}
-      <div className="bg-white rounded-xl border border-gray-100 shadow-sm p-6">
-        <h3 className="font-semibold text-gray-900 mb-4 flex items-center gap-2"><Users className="w-4 h-4" /> Leave Management</h3>
-        <div className="grid grid-cols-2 gap-3 mb-4">
-          <SelectDropdown
-            value={lForm.project_id}
-            onChange={v => setLForm(p => ({...p, project_id: v, attendee_id: ''}))}
-            options={projects.map(p => ({ value: p.id, label: p.name }))}
-            className="w-full"
-          />
-          <SelectDropdown
-            value={lForm.attendee_id}
-            onChange={v => setLForm(p => ({...p, attendee_id: v}))}
-            options={[{ value: '', label: 'Select attendee' }, ...projectAttendees.map(a => ({ value: a.id, label: a.name }))]}
-            placeholder="Select attendee"
-            className="w-full"
-          />
-          <DatePickerPopover value={lForm.start_date} onChange={v => setLForm(p => ({...p, start_date: v}))} fullWidth placeholder="Start date" />
-          <DatePickerPopover value={lForm.end_date}   onChange={v => setLForm(p => ({...p, end_date: v}))}   fullWidth placeholder="End date" />
-          <div className="col-span-2 flex gap-2">
-            <input value={lForm.reason} onChange={e => setLForm(p => ({...p, reason: e.target.value}))}
-              placeholder="Reason for leave"
-              className="flex-1 border border-gray-200 rounded-xl px-3 py-2.5 text-sm focus:outline-none focus:ring-2 focus:ring-gray-900" />
-            <button onClick={() => {
-              if (lForm.attendee_id && lForm.start_date && lForm.end_date) {
-                addLeave({ ...lForm, approved_by: 'Admin User' })
-                setLForm(p => ({...p, attendee_id: '', start_date: '', end_date: '', reason: ''}))
-              }
-            }} disabled={!canEdit} className="px-3 py-2 bg-gray-900 text-white rounded-xl hover:bg-gray-800 disabled:opacity-40 disabled:cursor-not-allowed">
-              <Plus className="w-4 h-4" />
-            </button>
-          </div>
-        </div>
-        <div className="space-y-2">
-          {leaves.length === 0 && <p className="text-sm text-gray-400 text-center py-4">No leaves recorded yet.</p>}
-          {leaves.map(l => {
-            const attendee = attendees.find(a => a.id === l.attendee_id)
-            const project  = projects.find(p => p.id === l.project_id)
-            return (
-              <div key={l.id} className="flex items-center justify-between px-4 py-3 bg-gray-50 rounded-lg">
-                <div>
-                  <p className="text-sm font-medium text-gray-900">{attendee?.name ?? 'Unknown'}</p>
-                  <p className="text-xs text-gray-400">{project?.name} · {l.start_date} → {l.end_date} · {l.reason}</p>
-                </div>
-                <button onClick={() => deleteLeave(l.id)} disabled={!canEdit} className="text-gray-300 hover:text-red-500 transition-colors disabled:opacity-30 disabled:cursor-not-allowed">
-                  <Trash2 className="w-4 h-4" />
-                </button>
-              </div>
-            )
-          })}
-        </div>
       </div>
     </div>
   )

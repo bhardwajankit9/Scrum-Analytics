@@ -9,6 +9,7 @@ import { DatePickerPopover } from '../components/ui/DatePickerPopover'
 import { SelectDropdown } from '../components/ui/SelectDropdown'
 import { ShimmerStyle, SkeletonMetricCard, SkeletonTableRows, SkeletonLine } from '../components/ui/Skeleton'
 import { SectionErrorBoundary } from '../components/ui/ErrorBoundary'
+import { ScrumTimesTile } from '../components/ui/ScrumTimesTile'
 
 // ─── helpers ──────────────────────────────────────────────────────────────────
 
@@ -31,13 +32,13 @@ function StatusBadge({ status, minutesLate = 0 }: { status: string; minutesLate?
   if (status === 'late')
     return (
       <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-orange-50 text-orange-700 border border-orange-200">
-        <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />Late ({minutesLate}m)
+        <span className="w-1.5 h-1.5 rounded-full bg-orange-500" />Late({minutesLate} min)
       </span>
     )
   return (
     <span className="inline-flex items-center gap-1.5 px-2.5 py-1 rounded-full text-xs font-medium bg-red-50 text-red-700 border border-red-200">
       <span className="w-1.5 h-1.5 rounded-full bg-red-500" />
-      {status === 'absent' ? 'Absent' : 'Missing Punch'}
+      {status === 'absent' ? 'On Leave' : 'Missing Punch'}
     </span>
   )
 }
@@ -275,7 +276,8 @@ function DashboardInner() {
     filterStatus, setFilterStatus, filterMode, setFilterMode,
     search, setSearch, reset,
     filtered, dateLabel,
-    presentCount, lateCount, absentCount, total,
+    presentCount, lateCount, absentCount, onLeaveCount, wfhCount, officeCount, onWeekendCount, onHolidayCount, total,
+    isWeekend, isPublicHoliday, publicHolidayName,
     projectAttendance,
     addManualEntry, updateEntry, removeEntry, exportCSV: handleExportCSV,
     dataLoading,
@@ -296,11 +298,41 @@ function DashboardInner() {
   // Reset to first page whenever the filtered list changes (new filter/search applied)
   useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filtered])
 
+  // Select all / Batch delete
+  const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
+  const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+
   const sortedFiltered = [...filtered].sort((a, b) => {
     const nameA = attendees.find(att => att.id === a.attendee_id)?.name ?? ''
     const nameB = attendees.find(att => att.id === b.attendee_id)?.name ?? ''
     return nameA.localeCompare(nameB)
   })
+
+  const allSelected = selectedIds.size === sortedFiltered.length && sortedFiltered.length > 0
+  
+  const handleSelectAll = (checked: boolean) => {
+    if (checked) {
+      setSelectedIds(new Set(sortedFiltered.map(r => r.id)))
+    } else {
+      setSelectedIds(new Set())
+    }
+  }
+
+  const handleSelectRecord = (recordId: string, checked: boolean) => {
+    const newSelected = new Set(selectedIds)
+    if (checked) {
+      newSelected.add(recordId)
+    } else {
+      newSelected.delete(recordId)
+    }
+    setSelectedIds(newSelected)
+  }
+
+  const handleDeleteSelected = () => {
+    selectedIds.forEach(id => removeEntry(id))
+    setSelectedIds(new Set())
+    setShowDeleteConfirm(false)
+  }
   const visibleRecords = sortedFiltered.slice(0, visibleCount)
   const hasMore = visibleCount < sortedFiltered.length
 
@@ -328,6 +360,28 @@ function DashboardInner() {
         </div>
       </div>
 
+      {/* Weekend Banner */}
+      {isWeekend && (
+        <div className="bg-blue-50 border border-blue-300 rounded-lg p-4 text-blue-900 font-semibold flex items-center gap-3 mb-6">
+          <span className="text-2xl">📅</span>
+          <div>
+            <p>Weekend - No attendance tracking today</p>
+            <p className="text-sm font-normal text-blue-700">All team members are off</p>
+          </div>
+        </div>
+      )}
+
+      {/* Public Holiday Banner */}
+      {isPublicHoliday && (
+        <div className="bg-amber-50 border border-amber-300 rounded-lg p-4 text-amber-900 font-semibold flex items-center gap-3 mb-6">
+          <span className="text-2xl">🎉</span>
+          <div>
+            <p>{publicHolidayName} - Public Holiday</p>
+            <p className="text-sm font-normal text-amber-700">No attendance tracking today</p>
+          </div>
+        </div>
+      )}
+
       {/* Metric cards */}
       <ShimmerStyle />
       <SectionErrorBoundary label="Metric Cards">
@@ -337,9 +391,9 @@ function DashboardInner() {
         ) : (
           <>
             <MetricCard title="Present Today"  count={presentCount} subtext={String(total)} trend="12%" trendUp={true}  iconIndex={0} />
-            <MetricCard title="Absent"         count={absentCount}                           trend="3%"  trendUp={false} iconIndex={1} />
+            <MetricCard title="On Leave"       count={absentCount}                           trend="0%"  trendUp={false} iconIndex={1} />
             <MetricCard title="Late Arrivals"  count={lateCount}                             trend="5%"  trendUp={true}  iconIndex={2} />
-            <MetricCard title="On Leave"       count={1}                                     trend="0%"  trendUp={false} iconIndex={3} />
+            <MetricCard title="Work Mode"      count={wfhCount + officeCount}                trend="0%"  trendUp={false} iconIndex={3} subtext={`WFH: ${wfhCount} | Office: ${officeCount}`} />
           </>
         )}
       </div>
@@ -403,7 +457,7 @@ function DashboardInner() {
               {[
                 { value: '',       label: 'All',    emoji: '🌐' },
                 { value: 'office', label: 'Office', emoji: '🏢' },
-                { value: 'wfh',    label: 'Remote', emoji: '🏠' },
+                { value: 'wfh',    label: 'WFH', emoji: '🏠' },
               ].map(opt => (
                 <button
                   key={opt.value}
@@ -429,7 +483,7 @@ function DashboardInner() {
                 { value: '',        label: 'All',     cls: filterStatus === '' ? 'bg-gray-900 text-white border-gray-900' : 'bg-white text-gray-600 border-gray-200 hover:border-gray-400' },
                 { value: 'present', label: '✅ Present', cls: filterStatus === 'present' ? 'bg-green-600 text-white border-green-600' : 'bg-white text-gray-600 border-gray-200 hover:border-green-400 hover:text-green-700' },
                 { value: 'late',    label: '⏰ Late',    cls: filterStatus === 'late'    ? 'bg-orange-500 text-white border-orange-500' : 'bg-white text-gray-600 border-gray-200 hover:border-orange-400 hover:text-orange-700' },
-                { value: 'absent',  label: '❌ Absent',  cls: filterStatus === 'absent'  ? 'bg-red-600 text-white border-red-600'     : 'bg-white text-gray-600 border-gray-200 hover:border-red-400 hover:text-red-700' },
+                { value: 'absent',  label: '📋 On Leave',  cls: filterStatus === 'absent'  ? 'bg-purple-600 text-white border-purple-600'     : 'bg-white text-gray-600 border-gray-200 hover:border-purple-400 hover:text-purple-700' },
               ].map(opt => (
                 <button
                   key={opt.value}
@@ -459,6 +513,15 @@ function DashboardInner() {
               </p>
             </div>
             <div className="flex items-center gap-2">
+              {selectedIds.size > 0 && (
+                <button
+                  onClick={() => setShowDeleteConfirm(true)}
+                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100 border border-red-200"
+                >
+                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                  Delete ({selectedIds.size})
+                </button>
+              )}
               <button onClick={handleExportCSV} className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
                 ↑ Export CSV
               </button>
@@ -473,6 +536,14 @@ function DashboardInner() {
           <table className="w-full">
             <thead>
               <tr className="border-b border-gray-100">
+                <th key="select" className="px-5 py-3 text-left">
+                  <input
+                    type="checkbox"
+                    checked={allSelected}
+                    onChange={e => handleSelectAll(e.target.checked)}
+                    className="w-4 h-4 rounded border-gray-300 text-gray-900 cursor-pointer"
+                  />
+                </th>
                 {['ATTENDEE', 'TIME & PROJECT', 'WORK MODE', 'STATUS', 'ACTION'].map(col => (
                   <th key={col} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{col}</th>
                 ))}
@@ -485,8 +556,17 @@ function DashboardInner() {
                 const att  = attendees.find(a => a.id === record.attendee_id)
                 const proj = projects.find(p => p.id === record.project_id)
                 if (!att) return null
+                const isSelected = selectedIds.has(record.id)
                 return (
-                  <tr key={record.id} className="hover:bg-gray-50/60 transition-colors">
+                  <tr key={record.id} className={`hover:bg-gray-50/60 transition-colors ${isSelected ? 'bg-blue-50' : ''}`}>
+                    <td className="px-5 py-3.5">
+                      <input
+                        type="checkbox"
+                        checked={isSelected}
+                        onChange={e => handleSelectRecord(record.id, e.target.checked)}
+                        className="w-4 h-4 rounded border-gray-300 text-gray-900 cursor-pointer"
+                      />
+                    </td>
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 shrink-0">
@@ -505,7 +585,7 @@ function DashboardInner() {
                     <td className="px-5 py-3.5">
                       {record.work_mode ? (
                         <span className="text-sm text-gray-700">
-                          {record.work_mode === 'office' ? '🏢 Office' : '🏠 Remote'}
+                          {record.work_mode === 'office' ? '🏢 Office' : '🏠 WFH'}
                         </span>
                       ) : <span className="text-xs text-gray-300">—</span>}
                     </td>
@@ -640,6 +720,11 @@ function DashboardInner() {
             </div>
           </div>
           </SectionErrorBoundary>
+
+          {/* Scrum Times */}
+          <SectionErrorBoundary label="Scrum Times">
+            <ScrumTimesTile projects={projects.filter(p => p.status === 'active')} />
+          </SectionErrorBoundary>
         </div>
       </div>
 
@@ -682,6 +767,23 @@ function DashboardInner() {
             <div className="flex gap-3">
               <button onClick={() => setDeleteId(null)} className="flex-1 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
               <button onClick={() => { removeEntry(deleteId); setDeleteId(null) }} className="flex-1 py-2 bg-red-600 text-white rounded-xl text-sm font-semibold hover:bg-red-700 transition-colors">Delete</button>
+            </div>
+          </div>
+        </div>
+      )}
+
+      {/* Delete selected confirm */}
+      {showDeleteConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => setShowDeleteConfirm(false)}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-xs p-6 text-center" onClick={e => e.stopPropagation()}>
+            <div className="w-12 h-12 bg-red-100 rounded-full flex items-center justify-center mx-auto mb-4">
+              <svg className="w-5 h-5 text-red-600" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+            </div>
+            <h2 className="font-semibold text-gray-900 mb-2">Delete {selectedIds.size} Record{selectedIds.size !== 1 ? 's' : ''}?</h2>
+            <p className="text-sm text-gray-500 mb-5">These attendance records will be permanently deleted and cannot be recovered.</p>
+            <div className="flex gap-3">
+              <button onClick={() => setShowDeleteConfirm(false)} className="flex-1 py-2 border border-gray-200 rounded-xl text-sm font-medium text-gray-700 hover:bg-gray-50">Cancel</button>
+              <button onClick={handleDeleteSelected} className="flex-1 py-2 bg-red-600 text-white rounded-xl text-sm font-semibold hover:bg-red-700 transition-colors">Delete All</button>
             </div>
           </div>
         </div>

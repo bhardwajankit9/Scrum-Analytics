@@ -1,10 +1,12 @@
-import { useState, useMemo } from 'react'
-import { ChevronLeft, Check, X, Save, AlertTriangle, CheckCircle2, Clock } from 'lucide-react'
+import { useState, useMemo, useEffect, useRef } from 'react'
+import { ChevronLeft, Check, X, Save, AlertTriangle, CheckCircle2, Clock, Flag } from 'lucide-react'
 import { useMarkAttendanceData } from '../presentation/viewmodels/useMarkAttendanceViewModel'
-import type { AttendanceEntry } from '../domain/entities'
+import { useBlockerViewModel } from '../presentation/viewmodels/useBlockerViewModel'
+import type { AttendanceEntry, Blocker } from '../domain/entities'
 import { SelectDropdown } from '../components/ui/SelectDropdown'
 import { DatePickerPopover } from '../components/ui/DatePickerPopover'
 import { ShimmerStyle, SkeletonLine } from '../components/ui/Skeleton'
+import { SupabaseScrumSessionRepository, SupabaseAttendanceRuleRepository } from '../data/repositories/ScrumSessionRepository'
 
 // ─── Helpers ──────────────────────────────────────────────────────────────────
 
@@ -26,6 +28,13 @@ function fmt12(t: string | null) {
   return `${h % 12 || 12}:${String(m).padStart(2, '0')} ${p}`
 }
 
+function getCurrentTime() {
+  const now = new Date()
+  const h = String(now.getHours()).padStart(2, '0')
+  const m = String(now.getMinutes()).padStart(2, '0')
+  return `${h}:${m}`
+}
+
 // ─── Row type ─────────────────────────────────────────────────────────────────
 
 interface MarkRow {
@@ -38,6 +47,7 @@ interface MarkRow {
   join_time: string
   notes: string
   minutes_late: number
+  blocker?: Blocker | null
 }
 
 const STATUS_ACTIVE = {
@@ -47,21 +57,52 @@ const STATUS_ACTIVE = {
   unmarked:'bg-gray-100 text-gray-500 border-gray-200',
 }
 
+const STATUS_LABELS = {
+  present: 'Present',
+  late:    'Late',
+  absent:  'On Leave',
+}
+
 // ─── Screen ───────────────────────────────────────────────────────────────────
 
 export default function MarkAttendanceScreen() {
   const { projects, attendees, getAttendanceForDate, saveAttendance, holidays, dataLoading } = useMarkAttendanceData()
+  const blockerVM = useBlockerViewModel()
+
+  // Refs for time inputs
+  const scrumStartInputRef = useRef<HTMLInputElement>(null)
+  const scrumEndInputRef = useRef<HTMLInputElement>(null)
 
   const [step, setStep]           = useState<1 | 2>(1)
   const [projectId, setProjectId] = useState('')
   const [date, setDate]           = useState(new Date().toISOString().slice(0, 10))
+  const [scrumTime, setScrumTime] = useState('')
+  const [scrumEndTime, setScrumEndTime] = useState('')
+  const [editingStartTime, setEditingStartTime] = useState(false)
+  const [editingEndTime, setEditingEndTime] = useState(false)
+  const [showSaveConfirm, setShowSaveConfirm] = useState(false)
   const [rows, setRows]           = useState<MarkRow[]>([])
   const [saved, setSaved]         = useState(false)
   const [defaultMode, setDefaultMode] = useState<'office' | 'wfh'>('office')
+  const [openBlockerId, setOpenBlockerId] = useState<string | null>(null)
+  const [blockerForm, setBlockerForm] = useState<{
+    description: string
+    severity: 'critical' | 'high' | 'medium' | 'low'
+  }>({
+    description: '',
+    severity: 'high',
+  })
 
   const activeProjects  = projects.filter(p => p.status === 'active')
   const selectedProject = projects.find(p => p.id === projectId)
   const holiday = holidays.find(h => h.project_id === projectId && h.holiday_date === date)
+
+  // Auto-set scrum end time when modal opens
+  useEffect(() => {
+    if (showSaveConfirm && !scrumEndTime) {
+      setScrumEndTime(getCurrentTime())
+    }
+  }, [showSaveConfirm])
 
   // Step 1 → Step 2: load attendees
   function loadAttendees() {
@@ -73,6 +114,9 @@ export default function MarkAttendanceScreen() {
     const existing = getAttendanceForDate(projectId, date)
     const initial: MarkRow[] = projAttendees.map(a => {
       const ex = existing.find(e => e.attendee_id === a.id)
+      // Get open blocker for this attendee (only one at a time displayed)
+      const openBlockers = blockerVM.getOpenBlockers(projectId, a.id)
+      const blocker = openBlockers.length > 0 ? openBlockers[0] : null
       return {
         attendee_id: a.id,
         name:        a.name,
@@ -83,6 +127,7 @@ export default function MarkAttendanceScreen() {
         join_time:   ex?.join_time ?? '10:15',
         notes:       ex?.notes ?? '',
         minutes_late:ex?.minutes_late ?? 0,
+        blocker:     blocker,
       }
     })
     setRows(initial)
@@ -96,10 +141,10 @@ export default function MarkAttendanceScreen() {
       const next = [...prev]
       const row = { ...next[idx], ...updates }
 
-      if (updates.join_time !== undefined && selectedProject && row.status !== 'absent') {
+      if (updates.join_time !== undefined && scrumTime && row.status !== 'absent') {
         if (updates.join_time) {
           const { status, minutesLate } = computeLate(
-            updates.join_time, selectedProject.scrum_time, selectedProject.late_grace_minutes
+            updates.join_time, scrumTime, selectedProject?.late_grace_minutes ?? 0
           )
           row.status       = status
           row.minutes_late = minutesLate
@@ -110,6 +155,10 @@ export default function MarkAttendanceScreen() {
         row.join_time    = ''
         row.work_mode    = null
         row.minutes_late = 0
+        row.notes = 'On Leave'
+      }
+      if (updates.status === 'late') {
+        row.notes = 'Scrum not joined'
       }
       if ((updates.status === 'present' || updates.status === 'late') && !row.work_mode) {
         row.work_mode = defaultMode
@@ -128,6 +177,7 @@ export default function MarkAttendanceScreen() {
       work_mode:    status === 'absent' ? null : defaultMode,
       join_time:    status === 'absent' ? '' : r.join_time,
       minutes_late: 0,
+      notes:        status === 'absent' ? 'On Leave' : '',
     })))
   }
 
@@ -147,6 +197,10 @@ export default function MarkAttendanceScreen() {
   }), [rows])
 
   function handleSave() {
+    setShowSaveConfirm(true)
+  }
+
+  function confirmAndSave() {
     if (!selectedProject) return
     const entries: AttendanceEntry[] = rows.map(row => ({
       id:           '',
@@ -161,9 +215,21 @@ export default function MarkAttendanceScreen() {
       marked_by:    'Admin User',
       marked_at:    new Date().toISOString(),
     }))
+    
+    // Save attendance entries
     saveAttendance(entries)
+    
+    // Save scrum times and attendance rules
+    const scrumSessionRepo = new SupabaseScrumSessionRepository()
+    const attendanceRuleRepo = new SupabaseAttendanceRuleRepository()
+    
+    Promise.all([
+      scrumSessionRepo.saveScrumSession(projectId, date, scrumTime, scrumEndTime),
+      attendanceRuleRepo.saveAttendanceRule(projectId, scrumTime, scrumEndTime, selectedProject.late_grace_minutes, selectedProject.scrum_timezone),
+    ]).catch(err => console.error('Failed to save scrum times:', err))
+    
     setSaved(true)
-    window.scrollTo({ top: 0, behavior: 'smooth' })
+    setShowSaveConfirm(false)
   }
 
   const dateLabel = new Date(date + 'T00:00:00').toLocaleDateString('en-US', {
@@ -199,7 +265,10 @@ export default function MarkAttendanceScreen() {
             </label>
             <SelectDropdown
               value={projectId}
-              onChange={setProjectId}
+              onChange={pid => {
+                setProjectId(pid)
+                setScrumTime(getCurrentTime())
+              }}
               options={activeProjects.map(p => ({ value: p.id, label: `${p.name} · ${p.description}` }))}
               placeholder="— Select a project —"
               className="w-full"
@@ -230,6 +299,48 @@ export default function MarkAttendanceScreen() {
               Date
             </label>
             <DatePickerPopover value={date} onChange={setDate} fullWidth />
+          </div>
+
+          {/* Scrum Time picker */}
+          <div>
+            <label className="block text-xs font-semibold text-gray-500 uppercase tracking-wider mb-2">
+              Scrum Started
+            </label>
+            {editingStartTime ? (
+              <div className="flex items-center gap-3 p-4 bg-yellow-50 rounded-xl border-2 border-yellow-400">
+                <Clock className="w-5 h-5 text-yellow-600 shrink-0" />
+                <input
+                  ref={scrumStartInputRef}
+                  type="time"
+                  value={scrumTime}
+                  onChange={e => setScrumTime(e.target.value)}
+                  autoFocus
+                  className="flex-1 px-3 py-2 border border-yellow-400 rounded-lg text-lg font-bold text-yellow-900 bg-white focus:outline-none focus:ring-2 focus:ring-yellow-600"
+                />
+                <button
+                  type="button"
+                  onClick={() => setEditingStartTime(false)}
+                  className="px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700 transition-colors whitespace-nowrap"
+                >
+                  Confirm
+                </button>
+              </div>
+            ) : (
+              <div className="flex items-center gap-3 p-4 bg-blue-50 rounded-xl border border-blue-200">
+                <Clock className="w-5 h-5 text-blue-600 shrink-0" />
+                <div className="flex-1">
+                  <p className="text-xs text-blue-600 font-medium">Current Time Detected</p>
+                  <p className="text-lg font-bold text-blue-900">{fmt12(scrumTime)}</p>
+                </div>
+                <button
+                  type="button"
+                  onClick={() => setEditingStartTime(true)}
+                  className="px-3 py-2 bg-blue-600 text-white rounded-lg text-xs font-medium hover:bg-blue-700 transition-colors"
+                >
+                  Edit
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Holiday warning */}
@@ -323,7 +434,7 @@ export default function MarkAttendanceScreen() {
         {[
           { label: 'Present',  count: counts.present,  cls: 'bg-green-100 text-green-700'  },
           { label: 'Late',     count: counts.late,     cls: 'bg-orange-100 text-orange-700'},
-          { label: 'Absent',   count: counts.absent,   cls: 'bg-red-100 text-red-700'      },
+          { label: 'On Leave',   count: counts.absent,   cls: 'bg-red-100 text-red-700'      },
           { label: 'Unmarked', count: counts.unmarked, cls: 'bg-gray-100 text-gray-500'    },
         ].map(s => (
           <span key={s.label} className={`px-3 py-1.5 rounded-lg text-xs font-semibold ${s.cls}`}>
@@ -346,7 +457,7 @@ export default function MarkAttendanceScreen() {
           onClick={() => markAll('absent')}
           className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 transition-colors"
         >
-          <X className="w-3.5 h-3.5" /> Mark All Absent
+          <X className="w-3.5 h-3.5" /> Mark All On Leave
         </button>
         <div className="flex items-center gap-2 ml-1">
           <span className="text-xs text-gray-400">Default mode:</span>
@@ -371,7 +482,7 @@ export default function MarkAttendanceScreen() {
         <table className="w-full">
           <thead>
             <tr className="border-b border-gray-100 bg-gray-50/50">
-              {['Attendee', 'Status', 'Work Mode', 'Join Time', 'Notes'].map(col => (
+              {['Attendee', 'Blocker', 'Status', 'Work Mode', 'Join Time', 'Notes'].map(col => (
                 <th key={col} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">
                   {col}
                 </th>
@@ -400,6 +511,34 @@ export default function MarkAttendanceScreen() {
                   </div>
                 </td>
 
+                {/* Blocker */}
+                <td className="px-5 py-4">
+                  {row.blocker ? (
+                    <button
+                      onClick={() => setOpenBlockerId(row.attendee_id)}
+                      className={`inline-flex items-center gap-1.5 px-2.5 py-1.5 rounded-full text-xs font-medium border transition-all ${
+                        row.blocker.severity === 'critical'
+                          ? 'bg-red-100 text-red-700 border-red-300 hover:ring-2 ring-red-200'
+                          : row.blocker.severity === 'high'
+                          ? 'bg-orange-100 text-orange-700 border-orange-300 hover:ring-2 ring-orange-200'
+                          : row.blocker.severity === 'medium'
+                          ? 'bg-yellow-100 text-yellow-700 border-yellow-300 hover:ring-2 ring-yellow-200'
+                          : 'bg-blue-100 text-blue-700 border-blue-300 hover:ring-2 ring-blue-200'
+                      }`}
+                    >
+                      <Flag className="w-3 h-3" />
+                      {row.blocker.severity.charAt(0).toUpperCase() + row.blocker.severity.slice(1)}
+                    </button>
+                  ) : (
+                    <button
+                      onClick={() => setOpenBlockerId(row.attendee_id)}
+                      className="px-2.5 py-1.5 text-xs text-blue-600 hover:bg-blue-50 rounded-lg transition-colors"
+                    >
+                      + Flag
+                    </button>
+                  )}
+                </td>
+
                 {/* Status */}
                 <td className="px-5 py-4">
                   <div className="flex items-center gap-1">
@@ -413,7 +552,7 @@ export default function MarkAttendanceScreen() {
                             : 'border-gray-100 text-gray-400 hover:border-gray-300 hover:text-gray-600'
                         }`}
                       >
-                        {s.charAt(0).toUpperCase() + s.slice(1)}
+                        {STATUS_LABELS[s]}
                         {s === 'late' && row.status === 'late' && row.minutes_late > 0 && (
                           <span className="ml-1 text-[10px]">({row.minutes_late}m)</span>
                         )}
@@ -436,7 +575,7 @@ export default function MarkAttendanceScreen() {
                               : 'border-gray-200 text-gray-500 hover:bg-gray-50'
                           }`}
                         >
-                          {mode === 'office' ? '🏢' : '🏠'} {mode.charAt(0).toUpperCase() + mode.slice(1)}
+                          {mode === 'office' ? '🏢 Office' : '🏠 WFH'}
                         </button>
                       ))}
                     </div>
@@ -501,6 +640,290 @@ export default function MarkAttendanceScreen() {
           </button>
         </div>
       </div>
+
+      {/* Blocker Modal */}
+      {openBlockerId && (() => {
+        const row = rows.find(r => r.attendee_id === openBlockerId)
+        const blocker = row?.blocker
+        const attendee = row?.name
+        const daysOpen = blocker
+          ? Math.floor(
+              (new Date().getTime() - new Date(blocker.reported_date).getTime()) /
+                (1000 * 60 * 60 * 24)
+            )
+          : 0
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md mx-4">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-orange-500" />
+                  <h2 className="font-semibold text-gray-900">
+                    {blocker ? 'Blocker Details' : 'Flag Blocker'}
+                  </h2>
+                </div>
+                <button
+                  onClick={() => setOpenBlockerId(null)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <span className="text-xl">×</span>
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="px-6 py-4 space-y-4">
+                {/* Attendee */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                    Attendee
+                  </label>
+                  <p className="text-sm text-gray-900">{attendee}</p>
+                </div>
+
+                {blocker ? (
+                  <>
+                    {/* Description */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Description
+                      </label>
+                      <p className="text-sm text-gray-700 bg-gray-50 rounded-lg px-3 py-2">
+                        {blocker.description}
+                      </p>
+                    </div>
+
+                    {/* Severity */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Severity
+                      </label>
+                      <div
+                        className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-lg text-xs font-medium border ${
+                          blocker.severity === 'critical'
+                            ? 'bg-red-100 text-red-700 border-red-300'
+                            : blocker.severity === 'high'
+                            ? 'bg-orange-100 text-orange-700 border-orange-300'
+                            : blocker.severity === 'medium'
+                            ? 'bg-yellow-100 text-yellow-700 border-yellow-300'
+                            : 'bg-blue-100 text-blue-700 border-blue-300'
+                        }`}
+                      >
+                        <AlertTriangle className="w-3 h-3" />
+                        {blocker.severity.charAt(0).toUpperCase() + blocker.severity.slice(1)}
+                      </div>
+                    </div>
+
+                    {/* Days Open */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Days Open
+                      </label>
+                      <p className="text-sm text-gray-900 font-semibold">{daysOpen} days</p>
+                    </div>
+
+                    {/* Reported Date */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Reported On
+                      </label>
+                      <p className="text-sm text-gray-700">
+                        {new Date(blocker.reported_date).toLocaleDateString()}
+                      </p>
+                    </div>
+                  </>
+                ) : (
+                  <>
+                    {/* Create Mode: Description */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Description
+                      </label>
+                      <textarea
+                        value={blockerForm.description}
+                        onChange={e =>
+                          setBlockerForm(prev => ({ ...prev, description: e.target.value }))
+                        }
+                        placeholder="Describe the blocker..."
+                        className="w-full border border-gray-200 rounded-lg px-3 py-2 text-sm focus:outline-none focus:ring-2 focus:ring-blue-500 text-gray-700 placeholder-gray-400 resize-none h-20"
+                      />
+                    </div>
+
+                    {/* Create Mode: Severity */}
+                    <div>
+                      <label className="block text-xs font-medium text-gray-600 mb-1.5">
+                        Severity
+                      </label>
+                      <div className="flex gap-2">
+                        {(['critical', 'high', 'medium', 'low'] as const).map(sev => (
+                          <button
+                            key={sev}
+                            onClick={() =>
+                              setBlockerForm(prev => ({ ...prev, severity: sev }))
+                            }
+                            className={`flex-1 px-2.5 py-1.5 rounded-lg text-xs font-medium border transition-all ${
+                              blockerForm.severity === sev
+                                ? sev === 'critical'
+                                  ? 'bg-red-100 text-red-700 border-red-300'
+                                  : sev === 'high'
+                                  ? 'bg-orange-100 text-orange-700 border-orange-300'
+                                  : sev === 'medium'
+                                  ? 'bg-yellow-100 text-yellow-700 border-yellow-300'
+                                  : 'bg-blue-100 text-blue-700 border-blue-300'
+                                : 'border-gray-200 text-gray-600 hover:border-gray-300'
+                            }`}
+                          >
+                            {sev.charAt(0).toUpperCase() + sev.slice(1)}
+                          </button>
+                        ))}
+                      </div>
+                    </div>
+                  </>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 flex items-center gap-3">
+                <button
+                  onClick={() => setOpenBlockerId(null)}
+                  className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                >
+                  Close
+                </button>
+                {blocker && (
+                  <button
+                    onClick={() => {
+                      try {
+                        blockerVM.resolveBlocker(blocker.id, 'current_user')
+                        // Update row locally without full reload
+                        setRows(prev =>
+                          prev.map(r =>
+                            r.attendee_id === openBlockerId
+                              ? { ...r, blocker: null }
+                              : r,
+                          ),
+                        )
+                        setOpenBlockerId(null)
+                      } catch (error) {
+                        console.error('Failed to resolve blocker:', error)
+                        alert('Failed to resolve blocker')
+                      }
+                    }}
+                    className="flex-1 px-4 py-2.5 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors text-sm"
+                  >
+                    Mark Resolved
+                  </button>
+                )}
+                {!blocker && (
+                  <button
+                    onClick={() => {
+                      if (!blockerForm.description.trim()) {
+                        alert('Please enter a blocker description')
+                        return
+                      }
+                      try {
+                        const newBlocker = blockerVM.createBlocker({
+                          projectId,
+                          attendeeId: openBlockerId,
+                          description: blockerForm.description,
+                          severity: blockerForm.severity,
+                        })
+                        // Update row locally with new blocker
+                        setRows(prev =>
+                          prev.map(r =>
+                            r.attendee_id === openBlockerId
+                              ? { ...r, blocker: newBlocker }
+                              : r,
+                          ),
+                        )
+                        // Reset form and close
+                        setBlockerForm({ description: '', severity: 'high' })
+                        setOpenBlockerId(null)
+                      } catch (error) {
+                        console.error('Failed to create blocker:', error)
+                        alert('Failed to create blocker')
+                      }
+                    }}
+                    className="flex-1 px-4 py-2.5 bg-blue-600 text-white font-medium rounded-lg hover:bg-blue-700 transition-colors text-sm"
+                  >
+                    Flag Blocker
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
+
+      {/* Save Confirmation Modal */}
+      {showSaveConfirm && (
+        <div className="fixed inset-0 bg-black/40 z-50 flex items-center justify-center p-4" onClick={() => {
+          setShowSaveConfirm(false)
+        }}>
+          <div className="bg-white rounded-2xl shadow-xl w-full max-w-md p-6" onClick={e => e.stopPropagation()}>
+            <div className="flex items-center gap-3 mb-4">
+              <div className="w-12 h-12 bg-green-100 rounded-full flex items-center justify-center">
+                <Clock className="w-6 h-6 text-green-600" />
+              </div>
+              <h2 className="text-lg font-semibold text-gray-900">Scrum Ended</h2>
+            </div>
+            <div className="mb-6 p-4 bg-green-50 rounded-xl border border-green-200">
+              <p className="text-xs text-green-600 font-medium mb-2">Current Time Detected</p>
+              <p className="text-2xl font-bold text-green-900">{fmt12(scrumEndTime || getCurrentTime())}</p>
+              <p className="text-xs text-green-600 mt-2">Adjust if needed</p>
+            </div>
+            {editingEndTime ? (
+              <div className="mb-6">
+                <div className="flex items-center gap-3 p-4 bg-green-100 rounded-lg border-2 border-green-500">
+                  <Clock className="w-4 h-4 text-green-600 shrink-0" />
+                  <input
+                    ref={scrumEndInputRef}
+                    type="time"
+                    value={scrumEndTime || getCurrentTime()}
+                    onChange={e => setScrumEndTime(e.target.value)}
+                    autoFocus
+                    className="flex-1 px-3 py-1.5 border border-green-500 rounded-lg font-semibold text-green-900 bg-white focus:outline-none focus:ring-2 focus:ring-green-600"
+                  />
+                  <button
+                    type="button"
+                    onClick={() => setEditingEndTime(false)}
+                    className="px-4 py-2 bg-green-600 text-white rounded-lg text-xs font-medium hover:bg-green-700 transition-colors whitespace-nowrap"
+                  >
+                    Confirm
+                  </button>
+                </div>
+              </div>
+            ) : (
+              <div className="mb-6">
+                <button
+                  type="button"
+                  onClick={() => setEditingEndTime(true)}
+                  className="w-full px-4 py-2.5 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors flex items-center justify-center gap-2"
+                >
+                  <Clock className="w-4 h-4" />
+                  Change Time
+                </button>
+              </div>
+            )}
+            <div className="flex items-center justify-end gap-3">
+              <button
+                onClick={() => setShowSaveConfirm(false)}
+                className="px-4 py-2 border border-gray-200 rounded-lg text-sm font-medium text-gray-700 hover:bg-gray-50 transition-colors"
+              >
+                Cancel
+              </button>
+              <button
+                onClick={confirmAndSave}
+                className="px-4 py-2 bg-gray-900 text-white rounded-lg text-sm font-semibold hover:bg-gray-800 transition-colors flex items-center gap-2"
+              >
+                <Save className="w-4 h-4" />
+                Save All
+              </button>
+            </div>
+          </div>
+        </div>
+      )}
     </div>
   )
 }

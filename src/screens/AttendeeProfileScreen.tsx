@@ -74,7 +74,7 @@ function cellLabel(cell: { work_mode: string | null; status: string | null }): s
   if (!cell.status) return 'No record'
   if (cell.status === 'absent') return 'Absent'
   if (cell.work_mode === 'office') return 'Office'
-  if (cell.work_mode === 'wfh') return 'WFH (Remote)'
+  if (cell.work_mode === 'wfh') return 'WFH'
   return 'Present'
 }
 
@@ -108,7 +108,7 @@ function WorkModeHeatmap({
       <div className="flex items-center justify-between mb-4">
         <div>
           <h2 className="font-semibold text-gray-900">Work Mode Heatmap</h2>
-          <p className="text-xs text-gray-400">Last 6 months · daily office vs remote pattern</p>
+          <p className="text-xs text-gray-400">Last 6 months · daily office vs WFH pattern</p>
         </div>
         <div className="flex items-center gap-4 text-xs text-gray-500">
           <span className="flex items-center gap-1.5">
@@ -177,7 +177,7 @@ function WorkModeHeatmap({
       {(officeDays + wfhDays) > 0 && (
         <div className="mt-4 pt-4 border-t border-gray-100">
           <div className="flex items-center gap-2 mb-1.5">
-            <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Office vs Remote split</span>
+            <span className="text-[11px] font-semibold text-gray-500 uppercase tracking-wide">Office vs WFH split</span>
             <span className="ml-auto text-xs font-semibold text-gray-700">
               {Math.round(officeDays / (officeDays + wfhDays) * 100)}% office
             </span>

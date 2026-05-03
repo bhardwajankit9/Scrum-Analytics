@@ -4,7 +4,7 @@
 
 import type {
   Project, Attendee, AttendanceEntry,
-  Holiday, Leave, ProjectMembership,
+  Holiday, Leave, ProjectMembership, Blocker,
 } from '../entities'
 
 // ── IProjectRepository ────────────────────────────────────────────────────────
@@ -64,5 +64,20 @@ export interface IMembershipRepository {
   readonly all: ProjectMembership[]
   getByProject(projectId: string): ProjectMembership[]
   add(m: Omit<ProjectMembership, 'id'>): ProjectMembership
+  remove(id: string): void
+}
+// ── IBlockerRepository ────────────────────────────────────────────────────────
+
+export interface IBlockerRepository {
+  readonly all: Blocker[]
+  readonly loading?: boolean
+  getById(id: string): Blocker | undefined
+  getByProject(projectId: string): Blocker[]
+  getByAttendee(attendeeId: string): Blocker[]
+  getByProjectAndAttendee(projectId: string, attendeeId: string): Blocker[]
+  getByStatus(status: 'open' | 'in_progress' | 'resolved'): Blocker[]
+  add(b: Omit<Blocker, 'id' | 'created_at' | 'updated_at'>): Blocker
+  update(id: string, patch: Partial<Omit<Blocker, 'id'>>): Blocker
+  resolve(id: string, resolvedBy: string, resolvedDate: string): Blocker
   remove(id: string): void
 }

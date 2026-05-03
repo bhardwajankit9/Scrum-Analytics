@@ -4,6 +4,7 @@
 
 import { useState, useMemo, useCallback } from 'react'
 import { useContainer } from '../../infrastructure/di/RepositoryProvider'
+import { PublicHolidayRepository } from '../../data/repositories/PublicHolidayRepository'
 import { ExportCSVUseCase }  from '../../domain/usecases'
 import type { AttendanceEntry, Attendee, Project } from '../../domain/entities'
 
@@ -46,7 +47,15 @@ export interface DashboardViewModel {
   presentCount:    number
   lateCount:       number
   absentCount:     number
+  onLeaveCount:    number
+  wfhCount:        number
+  officeCount:     number
+  onWeekendCount:  number
+  onHolidayCount:  number
   total:           number
+  isWeekend:       boolean
+  isPublicHoliday: boolean
+  publicHolidayName?: string
   projectAttendance: { id: string; project: string; present: number; late: number; absent: number; total: number }[]
   // Actions
   addManualEntry:  (entry: AttendanceEntry) => void
@@ -58,7 +67,8 @@ export interface DashboardViewModel {
 
 // ─── Hook ─────────────────────────────────────────────────────────────────────
 export function useDashboardViewModel(): DashboardViewModel {
-  const { attendanceRepo, attendeeRepo, projectRepo } = useContainer()
+  const { attendanceRepo, attendeeRepo, projectRepo, leaveRepo } = useContainer()
+  const holidayRepo = new PublicHolidayRepository()
 
   const today = new Date().toISOString().slice(0, 10)
 
@@ -71,6 +81,19 @@ export function useDashboardViewModel(): DashboardViewModel {
   const reset = useCallback(() => {
     setFilterDate(today); setFilterProject(''); setFilterStatus(''); setFilterMode(''); setSearch('')
   }, [today])
+
+  // Check if selected date is weekend
+  const isWeekend = useMemo(() => {
+    return holidayRepo.isWeekend(filterDate)
+  }, [filterDate])
+
+  // Check if selected date is public holiday
+  const holiday = useMemo(() => {
+    return holidayRepo.isHoliday(filterDate)
+  }, [filterDate])
+
+  const isPublicHoliday = !!holiday
+  const publicHolidayName = holiday?.name
 
   // Derive filtered attendance
   const filtered = useMemo(() => {
@@ -91,7 +114,42 @@ export function useDashboardViewModel(): DashboardViewModel {
   const presentCount = useMemo(() => filtered.filter(e => e.status === 'present').length, [filtered])
   const lateCount    = useMemo(() => filtered.filter(e => e.status === 'late').length,    [filtered])
   const absentCount  = useMemo(() => filtered.filter(e => e.status === 'absent').length,  [filtered])
-  const total        = filtered.length
+
+  // WFH count (people marked as WFH today)
+  const wfhCount = useMemo(() => {
+    return filtered.filter(e => e.work_mode === 'wfh').length
+  }, [filtered])
+
+  // Office count (people marked as Office today)
+  const officeCount = useMemo(() => {
+    return filtered.filter(e => e.work_mode === 'office').length
+  }, [filtered])
+
+  // Calculate on-leave count (excludes weekends & holidays)
+  const onLeaveCount = useMemo(() => {
+    if (isWeekend || isPublicHoliday) return 0
+    return attendeeRepo.all.filter(attendee => {
+      const leave = leaveRepo.all.find(l =>
+        l.attendee_id === attendee.id &&
+        l.start_date <= filterDate &&
+        l.end_date >= filterDate &&
+        (l.status === 'approved' || !l.status)  // approved or no status field
+      )
+      return !!leave
+    }).length
+  }, [leaveRepo.all, attendeeRepo.all, filterDate, isWeekend, isPublicHoliday])
+
+  // On weekend count
+  const onWeekendCount = useMemo(() => {
+    return isWeekend ? attendeeRepo.all.length : 0
+  }, [isWeekend, attendeeRepo.all.length])
+
+  // On holiday count
+  const onHolidayCount = useMemo(() => {
+    return isPublicHoliday ? attendeeRepo.all.length : 0
+  }, [isPublicHoliday, attendeeRepo.all.length])
+
+  const total        = presentCount + lateCount + absentCount
 
   const projectAttendance = useMemo(() =>
     projectRepo.all
@@ -140,18 +198,20 @@ export function useDashboardViewModel(): DashboardViewModel {
   const dataLoading = !!(projectRepo as any).loading || !!(attendeeRepo as any).loading
 
   return {
-    projects:         projectRepo.all,
-    attendees:        attendeeRepo.all,
-    filterDate,       setFilterDate,
-    filterProject,    setFilterProject,
-    filterStatus,     setFilterStatus,
-    filterMode,       setFilterMode,
-    search,           setSearch,
+    projects:          projectRepo.all,
+    attendees:         attendeeRepo.all,
+    filterDate,        setFilterDate,
+    filterProject,     setFilterProject,
+    filterStatus,      setFilterStatus,
+    filterMode,        setFilterMode,
+    search,            setSearch,
     reset,
-    filtered,         dateLabel,
-    presentCount,     lateCount,     absentCount,     total,
+    filtered,          dateLabel,
+    presentCount,      lateCount,     absentCount,     total,
+    onLeaveCount,      wfhCount,      officeCount,    onWeekendCount, onHolidayCount,
+    isWeekend,         isPublicHoliday, publicHolidayName,
     projectAttendance,
-    addManualEntry,   updateEntry,   removeEntry,   exportCSV,
+    addManualEntry,    updateEntry,   removeEntry,   exportCSV,
     dataLoading,
   }
 }

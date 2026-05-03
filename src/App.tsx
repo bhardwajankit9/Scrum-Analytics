@@ -9,11 +9,13 @@ import type { UserRole } from './domain/entities/auth'
 import DashboardScreen from './screens/DashboardScreen'
 import AttendeeDirectoryScreen from './screens/AttendeeDirectoryScreen'
 import AttendeeProfileScreen from './screens/AttendeeProfileScreen'
-import DetailedReportsScreen from './screens/DetailedReportsScreen'
+import AttendeeComparisonsScreen from './screens/AttendeeComparisonsScreen'
+import AttendanceTrendsScreen from './screens/AttendanceTrendsScreen'
 import SystemSettingsScreen from './screens/SystemSettingsScreen'
 import MarkAttendanceScreen from './screens/MarkAttendanceScreen'
 import ProjectsScreen from './screens/ProjectsScreen'
 import AdminProfileScreen from './screens/AdminProfileScreen'
+import HolidayManagementScreen from './screens/HolidayManagementScreen'
 
 /** Redirect to /login if not authenticated. */
 function RequireAuth({ children }: { children: ReactNode }) {
@@ -49,13 +51,15 @@ export default function App() {
             <Route path="/projects" element={<ProjectsScreen />} />
             <Route path="/attendees" element={<AttendeeDirectoryScreen />} />
             <Route path="/attendees/:id" element={<AttendeeProfileScreen />} />
-            <Route path="/reports" element={<DetailedReportsScreen />} />
+            <Route path="/attendees/comparisons" element={<AttendeeComparisonsScreen />} />
+            <Route path="/reports/trends" element={<AttendanceTrendsScreen />} />
             <Route path="/profile" element={<AdminProfileScreen />} />
           </Route>
 
           {/* PMO + Owner only */}
           <Route element={<RequireRole allow={['owner_pmo','pmo']} />}>
             <Route path="/mark" element={<MarkAttendanceScreen />} />
+            <Route path="/holidays" element={<HolidayManagementScreen />} />
           </Route>
 
           {/* Owner only */}

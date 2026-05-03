@@ -11,6 +11,8 @@ import {
   LogOut,
   FolderOpen,
   X,
+  Calendar,
+  BarChart3,
 } from 'lucide-react'
 import { useAuth } from '../../infrastructure/di/AuthProvider'
 import { usePermissions } from '../../domain/permissions'
@@ -21,13 +23,15 @@ const navItems = [
   { id: 'dashboard', label: 'Dashboard',  icon: LayoutDashboard, href: '/',          show: (p: Permissions) => p.canViewDashboard  },
   { id: 'projects',  label: 'Projects',   icon: FolderOpen,      href: '/projects', show: (p: Permissions) => p.canViewProjects   },
   { id: 'attendees', label: 'Attendees',  icon: Users,           href: '/attendees',show: (p: Permissions) => p.canViewAttendees  },
-  { id: 'reports',   label: 'Reports',    icon: FileText,        href: '/reports',  show: (p: Permissions) => p.canViewReports    },
+  { id: 'comparisons', label: 'Comparisons', icon: BarChart3,    href: '/attendees/comparisons',show: (p: Permissions) => p.canViewAttendees  },
+  { id: 'reports',   label: 'Reports',    icon: FileText,      href: '/reports/trends',  show: (p: Permissions) => p.canViewReports    },
   { id: 'settings',  label: 'Settings',   icon: Settings,        href: '/settings', show: (p: Permissions) => p.canViewSettings   },
 ]
 
 const quickActions = [
-  { id: 'mark',   label: 'Mark Attendance', icon: UserCheck, href: '/mark',    show: (p: Permissions) => p.canMarkAttendance },
-  { id: 'export', label: 'Export Data',     icon: Download,  href: '/reports', show: (p: Permissions) => p.canExportData     },
+  { id: 'mark',   label: 'Mark Attendance', icon: UserCheck, href: '/mark',      show: (p: Permissions) => p.canMarkAttendance },
+  { id: 'holidays', label: 'Manage Holidays', icon: Calendar, href: '/holidays', show: (p: Permissions) => p.canMarkAttendance },
+  { id: 'export', label: 'Export Data',     icon: Download,  href: '/reports',  show: (p: Permissions) => p.canExportData     },
 ]
 
 interface SidebarProps {

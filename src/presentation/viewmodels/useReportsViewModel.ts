@@ -7,17 +7,18 @@ import type { Attendee, AttendanceEntry, Project, DailyReportRow } from '../../d
 // ─── Lightweight data accessor for DetailedReportsScreen ─────────────────────
 // Provides raw data arrays; the screen manages its own complex computed state.
 export function useReportsData() {
-  const { attendanceRepo, attendeeRepo, projectRepo } = useContainer()
+  const { attendanceRepo, attendeeRepo, projectRepo, holidayRepo } = useContainer()
   const dataLoading = !!(projectRepo as any).loading || !!(attendeeRepo as any).loading
   return {
     attendanceRecords: attendanceRepo.all,
     attendees:         attendeeRepo.all,
     projects:          projectRepo.all,
+    holidays:          holidayRepo.all,
     dataLoading,
   }
 }
 
-type ReportType = 'daily_summary' | 'late_report' | 'absent_report' | 'wfh_report'
+type ReportType = 'daily_summary' | 'late_report' | 'onleave_report' | 'wfh_report'
 type Row = Record<string, string | number>
 
 const exporter = new ExportCSVUseCase()
@@ -26,7 +27,7 @@ const csvStrategies: Record<ReportType, { format(rows: unknown[]): Row[]; filena
   daily_summary: {
     format: (rows: unknown[]) => (rows as DailyReportRow[]).map(r => ({
       Date: r.date, Day: r.day, Total: r.total, Present: r.present,
-      Late: r.late, Absent: r.absent, 'Rate %': r.rate,
+      Late: r.late, 'On Leave': r.absent, 'Rate %': r.rate,
     })),
     filename: (f, t) => `daily_summary_${f}_${t}.csv`,
   },
@@ -39,12 +40,12 @@ const csvStrategies: Record<ReportType, { format(rows: unknown[]): Row[]; filena
     })),
     filename: (f, t) => `late_report_${f}_${t}.csv`,
   },
-  absent_report: {
+  onleave_report: {
     format: (rows: unknown[]) => (rows as Array<{ entry: AttendanceEntry; attendee?: Attendee; project?: Project }>).map(({ entry, attendee, project }) => ({
       Date: entry.date, Name: attendee?.name ?? entry.attendee_id,
       Project: project?.name ?? entry.project_id, Notes: entry.notes,
     })),
-    filename: (f, t) => `absent_report_${f}_${t}.csv`,
+    filename: (f, t) => `onleave_report_${f}_${t}.csv`,
   },
   wfh_report: {
     format: (rows: unknown[]) => (rows as Array<{ entry: AttendanceEntry; attendee?: Attendee; project?: Project }>).map(({ entry, attendee, project }) => ({
@@ -142,7 +143,7 @@ export function useReportsViewModel(): ReportsViewModel {
     const strategy = csvStrategies[reportType]
     const data = reportType === 'daily_summary' ? dailyRows
       : reportType === 'late_report'   ? lateRows
-      : reportType === 'absent_report' ? absentRows
+      : reportType === 'onleave_report' ? absentRows
       : wfhRows
     exporter.execute(strategy, data, fromDate, toDate)
   }, [reportType, dailyRows, lateRows, absentRows, wfhRows, fromDate, toDate])

@@ -69,6 +69,8 @@ export interface Leave {
   readonly start_date: string
   readonly end_date: string
   readonly reason: string
+  readonly type?: LeaveType
+  readonly status?: LeaveStatus
   readonly approved_by: string
   readonly created_at: string
 }
@@ -104,3 +106,36 @@ export interface ActionAlert {
   description: string
   time_ago: string
 }
+
+export type LeaveType = 'paid' | 'unpaid' | 'sick' | 'compassionate'
+export type LeaveStatus = 'pending' | 'approved' | 'rejected'
+
+export interface PublicHoliday {
+  id: string
+  name: string           // e.g., "Labour Day"
+  date: string           // YYYY-MM-DD
+  country: string        // optional, for multi-region
+  created_at: string
+}
+
+// ── Blocker ───────────────────────────────────────────────────────────────────
+
+export interface Blocker {
+  readonly id: string
+  readonly project_id: string
+  readonly attendee_id: string
+  readonly reported_date: string     // "YYYY-MM-DD"
+  readonly reported_by: string       // user email
+  readonly description: string
+  readonly severity: BlockerSeverity
+  readonly status: BlockerStatus
+  readonly resolved_date: string | null
+  readonly resolved_by: string | null
+  readonly related_data?: Record<string, unknown>
+  readonly notes: string
+  readonly created_at: string
+  readonly updated_at: string
+}
+
+export type BlockerSeverity = 'critical' | 'high' | 'medium' | 'low'
+export type BlockerStatus = 'open' | 'in_progress' | 'resolved'

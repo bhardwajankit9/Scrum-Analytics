@@ -15,6 +15,7 @@ import type {
   IHolidayRepository,
   ILeaveRepository,
   IMembershipRepository,
+  IBlockerRepository,
 } from '../../domain/repositories'
 
 import { useProjectRepository }    from '../../data/repositories/SupabaseProjectRepository'
@@ -23,6 +24,7 @@ import { useAttendanceRepository } from '../../data/repositories/SupabaseAttenda
 import { useHolidayRepository }    from '../../data/repositories/SupabaseHolidayRepository'
 import { useLeaveRepository }      from '../../data/repositories/SupabaseLeaveRepository'
 import { useMembershipRepository } from '../../data/repositories/SupabaseMembershipRepository'
+import { useBlockerRepository }    from '../../data/repositories/SupabaseBlockerRepository'
 
 // ── Container interface ───────────────────────────────────────────────────────
 
@@ -33,6 +35,7 @@ export interface IContainer {
   holidayRepo:    IHolidayRepository
   leaveRepo:      ILeaveRepository
   membershipRepo: IMembershipRepository
+  blockerRepo:    IBlockerRepository
   /** true while projects or attendees are still loading from Supabase */
   dataLoading: boolean
 }
@@ -52,10 +55,11 @@ export function RepositoryProvider({ children }: { children: ReactNode }) {
   const holidayRepo    = useHolidayRepository()
   const leaveRepo      = useLeaveRepository()
   const membershipRepo = useMembershipRepository()
+  const blockerRepo    = useBlockerRepository()
 
   return (
     <ContainerContext.Provider
-      value={{ projectRepo, attendeeRepo, attendanceRepo, holidayRepo, leaveRepo, membershipRepo,
+      value={{ projectRepo, attendeeRepo, attendanceRepo, holidayRepo, leaveRepo, membershipRepo, blockerRepo,
                dataLoading: projectRepo.loading === true || attendeeRepo.loading === true }}
     >
       {children}

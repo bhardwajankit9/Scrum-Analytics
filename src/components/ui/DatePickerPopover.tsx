@@ -16,11 +16,13 @@ interface DatePickerPopoverProps {
   onChange:    (v: string) => void
   fullWidth?:  boolean
   placeholder?: string
+  maxDate?:    string
 }
 
-export function DatePickerPopover({ value, onChange, fullWidth = false, placeholder = 'Pick a date' }: DatePickerPopoverProps) {
+export function DatePickerPopover({ value, onChange, fullWidth = false, placeholder = 'Pick a date', maxDate }: DatePickerPopoverProps) {
   const today    = new Date().toISOString().slice(0, 10)
   const selected = value ? new Date(value + 'T00:00:00') : new Date()
+  const max = maxDate ?? null
 
   const [open,   setOpen]   = useState(false)
   const [view,   setView]   = useState({ year: selected.getFullYear(), month: selected.getMonth() })
@@ -89,6 +91,13 @@ export function DatePickerPopover({ value, onChange, fullWidth = false, placehol
            todayDate.getMonth()    === view.month &&
            todayDate.getDate()     === day
   }
+  function isFutureDay(day: number) {
+    if (!max) return false
+    const cellDate = new Date(view.year, view.month, day)
+    const maxDateObj = new Date(max + 'T00:00:00')
+    const maxNormalized = new Date(maxDateObj.getFullYear(), maxDateObj.getMonth(), maxDateObj.getDate())
+    return cellDate > maxNormalized
+  }
 
   return (
     <div className={`relative ${fullWidth ? 'w-full' : ''}`}>
@@ -149,11 +158,14 @@ export function DatePickerPopover({ value, onChange, fullWidth = false, placehol
                   <button
                     type="button"
                     onClick={() => selectDay(day)}
+                    disabled={isFutureDay(day)}
                     className={`w-8 h-8 rounded-full text-sm font-medium transition-all
                       ${isSelected(day)
                         ? 'bg-gray-900 text-white shadow-sm'
                         : isCurrentDay(day)
                         ? 'bg-gray-100 text-gray-900 font-bold ring-1 ring-gray-300'
+                        : isFutureDay(day)
+                        ? 'text-gray-200 cursor-not-allowed'
                         : 'text-gray-700 hover:bg-gray-100'}`}
                   >
                     {day}

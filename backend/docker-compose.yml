@@ -1,0 +1,74 @@
+version: "3.9"
+
+# ──────────────────────────────────────────────────────────────────────────
+# Services
+# ──────────────────────────────────────────────────────────────────────────
+
+services:
+
+  # ── Ollama: self-hosted Mistral inference ────────────────────────────────
+  ollama:
+    image: ollama/ollama:latest
+    container_name: scrum_ollama
+    restart: unless-stopped
+    # GPU support (NVIDIA) ← comment out if using CPU only
+    # deploy:
+    #   resources:
+    #     reservations:
+    #       devices:
+    #         - driver: nvidia
+    #           count: all
+    #           capabilities: [gpu]
+    volumes:
+      - ollama_data:/root/.ollama       # persists downloaded models
+    ports:
+      - "11434:11434"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:11434/api/tags || exit 1"]
+      interval: 30s
+      timeout: 10s
+      retries: 5
+      start_period: 60s
+
+  # ── Model pull: runs once to download mistral ────────────────────────────
+  ollama-pull:
+    image: ollama/ollama:latest
+    container_name: scrum_ollama_pull
+    depends_on:
+      ollama:
+        condition: service_healthy
+    entrypoint: >
+      sh -c "OLLAMA_HOST=http://ollama:11434 ollama pull ${MISTRAL_MODEL:-mistral}"
+    environment:
+      OLLAMA_HOST: http://ollama:11434
+    restart: "no"
+
+  # ── FastAPI chat backend ─────────────────────────────────────────────────
+  api:
+    build:
+      context: .
+      dockerfile: Dockerfile
+    container_name: scrum_chat_api
+    restart: unless-stopped
+    depends_on:
+      ollama:
+        condition: service_healthy
+    env_file:
+      - .env
+    environment:
+      OLLAMA_BASE_URL: http://ollama:11434
+    ports:
+      - "8000:8000"
+    healthcheck:
+      test: ["CMD-SHELL", "curl -sf http://localhost:8000/health || exit 1"]
+      interval: 20s
+      timeout: 5s
+      retries: 3
+
+# ──────────────────────────────────────────────────────────────────────────
+# Volumes
+# ──────────────────────────────────────────────────────────────────────────
+
+volumes:
+  ollama_data:
+    driver: local
