@@ -112,11 +112,19 @@ export default function MarkAttendanceScreen() {
       a => a.project === proj.name && a.status === 'active'
     )
     const existing = getAttendanceForDate(projectId, date)
+    
+    // Check if selected date is today or in the future
+    const today = new Date().toISOString().slice(0, 10)
+    const isCurrentOrFutureDate = date >= today
+    
     const initial: MarkRow[] = projAttendees.map(a => {
       const ex = existing.find(e => e.attendee_id === a.id)
-      // Get open blocker for this attendee (only one at a time displayed)
-      const openBlockers = blockerVM.getOpenBlockers(projectId, a.id)
-      const blocker = openBlockers.length > 0 ? openBlockers[0] : null
+      // Only show blockers for today or future dates, not for past dates
+      let blocker = null
+      if (isCurrentOrFutureDate) {
+        const openBlockers = blockerVM.getOpenBlockers(projectId, a.id, date)
+        blocker = openBlockers.length > 0 ? openBlockers[0] : null
+      }
       return {
         attendee_id: a.id,
         name:        a.name,
@@ -504,8 +512,26 @@ export default function MarkAttendanceScreen() {
                     <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 shrink-0">
                       {row.name.split(' ').map(n => n[0]).join('')}
                     </div>
-                    <div>
-                      <p className="text-sm font-medium text-gray-900">{row.name}</p>
+                    <div className="flex-1">
+                      <div className="flex items-center gap-2">
+                        <p className="text-sm font-medium text-gray-900">{row.name}</p>
+                        {row.blocker && (
+                          <span
+                            className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold text-white ${
+                              row.blocker.severity === 'critical'
+                                ? 'bg-red-600'
+                                : row.blocker.severity === 'high'
+                                ? 'bg-orange-600'
+                                : row.blocker.severity === 'medium'
+                                ? 'bg-yellow-600'
+                                : 'bg-blue-600'
+                            }`}
+                          >
+                            <Flag className="w-2.5 h-2.5" />
+                            {row.blocker.severity.charAt(0).toUpperCase()}
+                          </span>
+                        )}
+                      </div>
                       <p className="text-xs text-gray-400">{row.employee_id} · {row.role.toUpperCase()}</p>
                     </div>
                   </div>

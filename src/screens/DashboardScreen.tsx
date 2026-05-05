@@ -1,10 +1,11 @@
 import { useState, useEffect } from 'react'
 import { useNavigate } from 'react-router-dom'
-import { Bell, Settings, Search, RotateCcw, Filter, AlertCircle, AlertTriangle, Info, MoreHorizontal, Users, UserX, Clock, UserCheck, X, Plus } from 'lucide-react'
+import { Bell, Settings, Search, RotateCcw, Filter, AlertCircle, AlertTriangle, Info, MoreHorizontal, Users, UserX, Clock, UserCheck, X, Plus, Flag } from 'lucide-react'
 import NotificationBell from '../components/ui/NotificationBell'
 import { useDashboardViewModel } from '../presentation/viewmodels/useDashboardViewModel'
+import { useBlockerViewModel } from '../presentation/viewmodels/useBlockerViewModel'
 import { useNotifications } from '../hooks/useNotifications'
-import type { Attendee, AttendanceEntry, Project, ActionAlert } from '../domain/entities'
+import type { Attendee, AttendanceEntry, Project, ActionAlert, Blocker } from '../domain/entities'
 import { DatePickerPopover } from '../components/ui/DatePickerPopover'
 import { SelectDropdown } from '../components/ui/SelectDropdown'
 import { ShimmerStyle, SkeletonMetricCard, SkeletonTableRows, SkeletonLine } from '../components/ui/Skeleton'
@@ -283,10 +284,34 @@ function DashboardInner() {
     dataLoading,
   } = useDashboardViewModel()
 
+  const blockerVM = useBlockerViewModel()
+
   const navigate = useNavigate()
   const [showManual, setShowManual] = useState(false)
   const today = new Date().toISOString().slice(0, 10)
   const { notifications } = useNotifications()
+
+  // Blocker data map: attendee_id -> blocker
+  const [blockerMap, setBlockerMap] = useState<Record<string, Blocker | null>>({})
+  
+  // Load blockers for all attendees
+  useEffect(() => {
+    if (projects.length === 0 || attendees.length === 0) return
+    const blockersData: Record<string, Blocker | null> = {}
+    attendees.forEach(attendee => {
+      // Get open blockers for this attendee across all projects (reported on or before today)
+      let blocker: Blocker | null = null
+      for (const proj of projects) {
+        const openBlockers = blockerVM.getOpenBlockers(proj.id, attendee.id, today)
+        if (openBlockers.length > 0) {
+          blocker = openBlockers[0]
+          break
+        }
+      }
+      blockersData[attendee.id] = blocker
+    })
+    setBlockerMap(blockersData)
+  }, [projects.length, attendees.length]) // Use length instead of array ref
 
   // Three-dot action menu
   const [menuOpenId, setMenuOpenId] = useState<string | null>(null)
@@ -299,8 +324,12 @@ function DashboardInner() {
   useEffect(() => { setVisibleCount(PAGE_SIZE) }, [filtered])
 
   // Select all / Batch delete
+  const [selectMode, setSelectMode] = useState(false)
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set())
   const [showDeleteConfirm, setShowDeleteConfirm] = useState(false)
+  
+  // Blocker modal
+  const [openBlockerId, setOpenBlockerId] = useState<string | null>(null)
 
   const sortedFiltered = [...filtered].sort((a, b) => {
     const nameA = attendees.find(att => att.id === a.attendee_id)?.name ?? ''
@@ -513,37 +542,61 @@ function DashboardInner() {
               </p>
             </div>
             <div className="flex items-center gap-2">
-              {selectedIds.size > 0 && (
-                <button
-                  onClick={() => setShowDeleteConfirm(true)}
-                  className="flex items-center gap-1.5 px-3 py-1.5 bg-red-50 text-red-600 rounded-lg text-xs font-medium hover:bg-red-100 border border-red-200"
-                >
-                  <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
-                  Delete ({selectedIds.size})
-                </button>
+              {selectMode ? (
+                <>
+                  {selectedIds.size > 0 && (
+                    <button
+                      onClick={() => setShowDeleteConfirm(true)}
+                      className="flex items-center gap-1.5 px-3 py-1.5 bg-red-600 text-white rounded-lg text-xs font-medium hover:bg-red-700 border border-red-700 transition-colors"
+                    >
+                      <svg className="w-3.5 h-3.5" fill="none" stroke="currentColor" viewBox="0 0 24 24"><path strokeLinecap="round" strokeLinejoin="round" strokeWidth={2} d="M19 7l-.867 12.142A2 2 0 0116.138 21H7.862a2 2 0 01-1.995-1.858L5 7m5 4v6m4-6v6m1-10V4a1 1 0 00-1-1h-4a1 1 0 00-1 1v3M4 7h16" /></svg>
+                      Delete ({selectedIds.size})
+                    </button>
+                  )}
+                  <button
+                    onClick={() => {
+                      setSelectMode(false)
+                      setSelectedIds(new Set())
+                    }}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-200 text-gray-700 rounded-lg text-xs font-medium hover:bg-gray-300 border border-gray-300 transition-colors"
+                  >
+                    Cancel
+                  </button>
+                </>
+              ) : (
+                <>
+                  <button
+                    onClick={() => setSelectMode(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-300 text-gray-600 rounded-lg text-xs font-medium hover:bg-gray-50 transition-colors"
+                  >
+                    ✓ Select
+                  </button>
+                  <button onClick={handleExportCSV} className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
+                    ↑ Export CSV
+                  </button>
+                  <button
+                    onClick={() => setShowManual(true)}
+                    className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800"
+                  >
+                    <Plus className="w-3 h-3" /> Manual Entry
+                  </button>
+                </>
               )}
-              <button onClick={handleExportCSV} className="flex items-center gap-1.5 px-3 py-1.5 border border-gray-200 rounded-lg text-xs font-medium text-gray-600 hover:bg-gray-50">
-                ↑ Export CSV
-              </button>
-              <button
-                onClick={() => setShowManual(true)}
-                className="flex items-center gap-1.5 px-3 py-1.5 bg-gray-900 text-white rounded-lg text-xs font-medium hover:bg-gray-800"
-              >
-                <Plus className="w-3 h-3" /> Manual Entry
-              </button>
             </div>
           </div>
           <table className="w-full">
             <thead>
-              <tr className="border-b border-gray-100">
-                <th key="select" className="px-5 py-3 text-left">
-                  <input
-                    type="checkbox"
-                    checked={allSelected}
-                    onChange={e => handleSelectAll(e.target.checked)}
-                    className="w-4 h-4 rounded border-gray-300 text-gray-900 cursor-pointer"
-                  />
-                </th>
+              <tr className="border-b border-gray-100 bg-gray-50/50">
+                {selectMode && (
+                  <th key="select" className="px-5 py-3 text-left w-12">
+                    <input
+                      type="checkbox"
+                      checked={allSelected}
+                      onChange={e => handleSelectAll(e.target.checked)}
+                      className="w-4 h-4 rounded border-gray-400 text-blue-600 cursor-pointer accent-blue-600 transition-all hover:border-gray-600"
+                    />
+                  </th>
+                )}
                 {['ATTENDEE', 'TIME & PROJECT', 'WORK MODE', 'STATUS', 'ACTION'].map(col => (
                   <th key={col} className="px-5 py-3 text-left text-[11px] font-semibold text-gray-400 uppercase tracking-wider">{col}</th>
                 ))}
@@ -558,22 +611,43 @@ function DashboardInner() {
                 if (!att) return null
                 const isSelected = selectedIds.has(record.id)
                 return (
-                  <tr key={record.id} className={`hover:bg-gray-50/60 transition-colors ${isSelected ? 'bg-blue-50' : ''}`}>
-                    <td className="px-5 py-3.5">
-                      <input
-                        type="checkbox"
-                        checked={isSelected}
-                        onChange={e => handleSelectRecord(record.id, e.target.checked)}
-                        className="w-4 h-4 rounded border-gray-300 text-gray-900 cursor-pointer"
-                      />
-                    </td>
+                  <tr key={record.id} className={`transition-all ${isSelected ? 'bg-blue-50 border-l-4 border-blue-500' : 'hover:bg-gray-50/60'}`}>
+                    {selectMode && (
+                      <td className="px-5 py-3.5 w-12">
+                        <input
+                          type="checkbox"
+                          checked={isSelected}
+                          onChange={e => handleSelectRecord(record.id, e.target.checked)}
+                          className="w-4 h-4 rounded border-gray-400 text-blue-600 cursor-pointer accent-blue-600 transition-all hover:border-gray-600"
+                        />
+                      </td>
+                    )}
                     <td className="px-5 py-3.5">
                       <div className="flex items-center gap-3">
                         <div className="w-8 h-8 rounded-full bg-gray-200 flex items-center justify-center text-xs font-bold text-gray-600 shrink-0">
                           {att.name.split(' ').map(n => n[0]).join('')}
                         </div>
-                        <div>
-                          <p className="text-sm font-medium text-gray-900">{att.name}</p>
+                        <div className="flex-1">
+                          <div className="flex items-center gap-2">
+                            <p className="text-sm font-medium text-gray-900">{att.name}</p>
+                            {blockerMap[att.id] && (
+                              <button
+                                onClick={() => setOpenBlockerId(att.id)}
+                                className={`inline-flex items-center gap-1 px-2 py-0.5 rounded-md text-[10px] font-bold text-white cursor-pointer transition-all hover:ring-2 ${
+                                  blockerMap[att.id]?.severity === 'critical'
+                                    ? 'bg-red-600 hover:ring-red-300'
+                                    : blockerMap[att.id]?.severity === 'high'
+                                    ? 'bg-orange-600 hover:ring-orange-300'
+                                    : blockerMap[att.id]?.severity === 'medium'
+                                    ? 'bg-yellow-600 hover:ring-yellow-300'
+                                    : 'bg-blue-600 hover:ring-blue-300'
+                                }`}
+                              >
+                                <Flag className="w-2.5 h-2.5" />
+                                {blockerMap[att.id]?.severity.charAt(0).toUpperCase()}
+                              </button>
+                            )}
+                          </div>
                           <p className="text-xs text-gray-400">{att.employee_id}</p>
                         </div>
                       </div>
@@ -788,6 +862,131 @@ function DashboardInner() {
           </div>
         </div>
       )}
+
+      {/* Blocker Modal */}
+      {openBlockerId && (() => {
+        const attendee = attendees.find(a => a.id === openBlockerId)
+        const blocker = blockerMap[openBlockerId]
+        const daysOpen = blocker
+          ? Math.floor(
+              (new Date().getTime() - new Date(blocker.reported_date).getTime()) /
+                (1000 * 60 * 60 * 24)
+            )
+          : 0
+
+        return (
+          <div className="fixed inset-0 bg-black/50 flex items-center justify-center z-50 p-4">
+            <div className="bg-white rounded-2xl shadow-2xl w-full max-w-md">
+              {/* Header */}
+              <div className="flex items-center justify-between px-6 py-4 border-b border-gray-100">
+                <div className="flex items-center gap-2">
+                  <AlertTriangle className="w-5 h-5 text-orange-500" />
+                  <h2 className="font-semibold text-gray-900">Blocker Details</h2>
+                </div>
+                <button
+                  onClick={() => setOpenBlockerId(null)}
+                  className="text-gray-400 hover:text-gray-600 transition-colors"
+                >
+                  <X className="w-5 h-5" />
+                </button>
+              </div>
+
+              {/* Content */}
+              <div className="px-6 py-4 space-y-4">
+                {/* Attendee */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Attendee</label>
+                  <p className="text-sm text-gray-900">{attendee?.name}</p>
+                </div>
+
+                {/* Severity */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Severity</label>
+                  <div className="flex items-center gap-2">
+                    <span
+                      className={`inline-flex items-center gap-1.5 px-3 py-1.5 rounded-full text-xs font-bold text-white ${
+                        blocker?.severity === 'critical'
+                          ? 'bg-red-600'
+                          : blocker?.severity === 'high'
+                          ? 'bg-orange-600'
+                          : blocker?.severity === 'medium'
+                          ? 'bg-yellow-600'
+                          : 'bg-blue-600'
+                      }`}
+                    >
+                      <Flag className="w-3 h-3" />
+                      {blocker && (blocker.severity.charAt(0).toUpperCase() + blocker.severity.slice(1))}
+                    </span>
+                  </div>
+                </div>
+
+                {/* Description */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Description</label>
+                  <p className="text-sm text-gray-700 bg-gray-50 rounded-lg p-3">{blocker?.description}</p>
+                </div>
+
+                {/* Reported Date & Days Open */}
+                <div className="grid grid-cols-2 gap-4">
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Reported</label>
+                    <p className="text-sm text-gray-900">
+                      {blocker ? new Date(blocker.reported_date).toLocaleDateString() : '—'}
+                    </p>
+                  </div>
+                  <div>
+                    <label className="block text-xs font-medium text-gray-600 mb-1.5">Days Open</label>
+                    <p className="text-sm text-gray-900">{daysOpen} day{daysOpen !== 1 ? 's' : ''}</p>
+                  </div>
+                </div>
+
+                {/* Reported By */}
+                <div>
+                  <label className="block text-xs font-medium text-gray-600 mb-1.5">Reported By</label>
+                  <p className="text-sm text-gray-900">{blocker?.reported_by || '—'}</p>
+                </div>
+
+                {blocker?.resolved_date && (
+                  <div className="bg-green-50 border border-green-200 rounded-lg p-3">
+                    <p className="text-xs font-medium text-green-800">✓ Resolved on {new Date(blocker.resolved_date).toLocaleDateString()}</p>
+                    {blocker.resolved_by && <p className="text-xs text-green-700 mt-1">by {blocker.resolved_by}</p>}
+                  </div>
+                )}
+              </div>
+
+              {/* Footer */}
+              <div className="px-6 py-4 border-t border-gray-100 bg-gray-50/50 flex items-center gap-3">
+                <button
+                  onClick={() => setOpenBlockerId(null)}
+                  className="flex-1 px-4 py-2.5 border border-gray-200 text-gray-700 font-medium rounded-lg hover:bg-gray-100 transition-colors text-sm"
+                >
+                  Close
+                </button>
+                {blocker && !blocker.resolved_date && (
+                  <button
+                    onClick={() => {
+                      try {
+                        blockerVM.resolveBlocker(blocker.id, 'Admin User')
+                        setBlockerMap(prev => ({
+                          ...prev,
+                          [openBlockerId]: null,
+                        }))
+                        setOpenBlockerId(null)
+                      } catch (error) {
+                        console.error('Failed to resolve blocker:', error)
+                        alert('Failed to resolve blocker')
+                      }
+                    }}
+                    className="flex-1 px-4 py-2.5 bg-green-600 text-white font-medium rounded-lg hover:bg-green-700 transition-colors text-sm"
+                  >
+                    ✓ Mark Resolved
+                  </button>
+                )}
+              </div>
+            </div>
+          </div>
+        )
+      })()}
 
       {/* Click-outside to close action menu */}
       {menuOpenId && <div className="fixed inset-0 z-40" onClick={() => setMenuOpenId(null)} />}

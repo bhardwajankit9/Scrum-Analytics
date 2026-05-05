@@ -9,7 +9,7 @@ export interface BlockerViewModel {
   
   // Queries
   getByProjectAndAttendee: (projectId: string, attendeeId: string) => Blocker[]
-  getOpenBlockers: (projectId: string, attendeeId: string) => Blocker[]
+  getOpenBlockers: (projectId: string, attendeeId: string, sinceDate?: string) => Blocker[]
   getBlockerById: (id: string) => Blocker | undefined
   
   // Metrics
@@ -42,9 +42,28 @@ export function useBlockerViewModel(): BlockerViewModel {
   )
 
   const getOpenBlockers = useCallback(
-    (projectId: string, attendeeId: string) => {
+    (projectId: string, attendeeId: string, sinceDate?: string) => {
       const all = getByProjectAndAttendee(projectId, attendeeId)
-      return all.filter((b: Blocker) => b.status === 'open' || b.status === 'in_progress')
+      const today = new Date().toISOString().slice(0, 10) // YYYY-MM-DD
+      
+      return all.filter((b: Blocker) => {
+        const isOpen = b.status === 'open' || b.status === 'in_progress'
+        if (!isOpen) return false
+        
+        // If a date is provided, check:
+        // 1. Date must be today or in the future (not past dates)
+        // 2. Blocker must be reported on or before that date
+        if (sinceDate) {
+          // Don't show blockers for past dates
+          if (sinceDate < today) return false
+          
+          // Blocker must be reported on or before the specified date
+          const reportedDate = b.reported_date.split('T')[0] // Extract YYYY-MM-DD
+          return reportedDate <= sinceDate
+        }
+        
+        return true
+      })
     },
     [getByProjectAndAttendee],
   )

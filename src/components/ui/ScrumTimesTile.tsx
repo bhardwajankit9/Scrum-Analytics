@@ -1,4 +1,4 @@
-import { useEffect, useState } from 'react'
+import { useEffect, useState, useRef, useCallback } from 'react'
 import { RotateCw } from 'lucide-react'
 import { SupabaseScrumSessionRepository, SupabaseAttendanceRuleRepository } from '../../data/repositories/ScrumSessionRepository'
 import type { Project } from '../../domain/entities'
@@ -14,18 +14,38 @@ interface ProjectScrumInfo {
 export function ScrumTimesTile({ projects }: { projects: Project[] }) {
   const [scrumInfo, setScrumInfo] = useState<ProjectScrumInfo[]>([])
   const [loading, setLoading] = useState(true)
+  
+  // Create repos once, not on every render
+  const scrumRepo = useRef(new SupabaseScrumSessionRepository())
+  const ruleRepo = useRef(new SupabaseAttendanceRuleRepository())
+  const lastProjectKey = useRef<string>('')
 
-  const scrumRepo = new SupabaseScrumSessionRepository()
-  const ruleRepo = new SupabaseAttendanceRuleRepository()
-
-  async function loadData() {
+  const loadData = useCallback(async () => {
+    if (projects.length === 0) {
+      setScrumInfo([])
+      setLoading(false)
+      return
+    }
+    
+    // Create a stable key from project IDs to detect actual changes
+    const projectKey = projects.map(p => p.id).sort().join(',')
+    
+    // Skip if same projects (prevent double-fetch on Strict Mode)
+    if (lastProjectKey.current && lastProjectKey.current === projectKey) {
+      setLoading(false)
+      return
+    }
+    
+    // Update the key marker
+    lastProjectKey.current = projectKey
+    
     setLoading(true)
     try {
       const info = await Promise.all(
         projects.map(async (project) => {
           const [rule, sessions] = await Promise.all([
-            ruleRepo.getAttendanceRuleByProject(project.id),
-            scrumRepo.getScrumSessionsByProject(project.id, 1),
+            ruleRepo.current.getAttendanceRuleByProject(project.id),
+            scrumRepo.current.getScrumSessionsByProject(project.id, 1),
           ])
 
           return {
@@ -50,11 +70,11 @@ export function ScrumTimesTile({ projects }: { projects: Project[] }) {
     } finally {
       setLoading(false)
     }
-  }
+  }, [projects])
 
   useEffect(() => {
     loadData()
-  }, [projects])
+  }, [loadData])
 
   const fmt12 = (t: string | null) => {
     if (!t) return '—'

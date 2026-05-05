@@ -1,83 +1,83 @@
 import { useState, useCallback, useRef } from 'react'
 import { supabase } from '../../lib/supabase/client'
 import type { ChatMessage } from './types'
+import { resolveDbContext, hasDataIntent, debugDbConnection } from './chatDataService'
 
 function uid() { return Math.random().toString(36).slice(2, 10) }
 
-// ── Edge Function URL (set VITE_SUPABASE_URL in .env.local) ───────────────────
-function getEdgeFunctionUrl(): string | null {
-  const base = import.meta.env.VITE_SUPABASE_URL as string | undefined
-  if (!base) return null
-  return `${base.replace(/\/$/, '')}/functions/v1/chat`
-}
+// ── Groq config ───────────────────────────────────────────────────────────────
+const GROQ_MODEL   = 'llama-3.3-70b-versatile'
+const GROQ_API_URL = 'https://api.groq.com/openai/v1/chat/completions'
 
-// ── Mistral API fallback (dev only — set VITE_MISTRAL_API_KEY in .env.local) ─
-// Used when the Edge Function is not yet deployed so dev works immediately.
-const MISTRAL_MODEL = 'mistral-small-latest'
 const SYSTEM_PROMPT =
   'You are a helpful Scrum and Agile assistant embedded in a team management app. ' +
-  'Answer questions about Scrum ceremonies, sprint planning, velocity, retrospectives, ' +
-  'and team dynamics concisely and clearly.'
+  'You have direct access to live team attendance, leave, and project data from the database. ' +
+  'When team data is provided at the start of the user message (prefixed with "--- LIVE TEAM DATA ---"), use it to answer accurately. ' +
+  'If the data section says "Could not fetch", tell the user the database is temporarily unavailable and to try again. ' +
+  'Format responses with bullet points. Never invent names, numbers, or attendance figures.'
 
-interface MistralMessage { role: 'user' | 'assistant'; content: string }
-
-function toMistralMessages(msgs: { role: string; content: string }[]): MistralMessage[] {
-  return msgs
-    .filter(m => m.role !== 'system')
-    .map(m => ({ role: (m.role === 'assistant' ? 'assistant' : 'user') as 'user' | 'assistant', content: m.content }))
+// ── Timeout helper — ensures DB fetch never hangs chat ─────────────────────
+function withTimeout<T>(promise: Promise<T>, ms: number, fallback: T): Promise<T> {
+  return Promise.race([
+    promise,
+    new Promise<T>(resolve => setTimeout(() => resolve(fallback), ms)),
+  ])
 }
 
-async function* streamMistralDirect(
+// ── Groq streaming ────────────────────────────────────────────────────────────
+async function* streamGroq(
   apiKey: string,
   history: { role: string; content: string }[],
 ): AsyncGenerator<string> {
-  const url = 'https://api.mistral.ai/v1/chat/completions'
-  const res = await fetch(url, {
+  const messages = [
+    { role: 'system', content: SYSTEM_PROMPT },
+    ...history
+      .filter(m => m.role !== 'system')
+      .map(m => ({ role: m.role === 'assistant' ? 'assistant' : 'user', content: m.content })),
+  ]
+
+  const res = await fetch(GROQ_API_URL, {
     method: 'POST',
     headers: {
       'Content-Type': 'application/json',
       'Authorization': `Bearer ${apiKey}`,
     },
     body: JSON.stringify({
-      model: MISTRAL_MODEL,
-      messages: [
-        { role: 'system', content: SYSTEM_PROMPT },
-        ...toMistralMessages(history),
-      ],
+      model: GROQ_MODEL,
+      messages,
       temperature: 0.7,
       max_tokens: 1024,
       stream: true,
     }),
   })
+
   if (!res.ok) {
-    const text = await res.text()
-    if (res.status === 429) {
-      throw new Error(`RATE_LIMITED: Mistral quota exceeded. Using mock responses.`)
-    }
-    throw new Error(`Mistral error ${res.status}: ${text}`)
+    const errText = await res.text()
+    if (res.status === 429) throw new Error('RATE_LIMITED')
+    throw new Error(`Groq error ${res.status}: ${errText}`)
   }
+
   const reader  = res.body!.getReader()
   const decoder = new TextDecoder()
   while (true) {
     const { done, value } = await reader.read()
     if (done) break
-    const text = decoder.decode(value, { stream: true })
-    for (const line of text.split('\n')) {
+    const chunk = decoder.decode(value, { stream: true })
+    for (const line of chunk.split('\n')) {
       const trimmed = line.trim()
       if (!trimmed.startsWith('data:')) continue
       const data = trimmed.slice(5).trim()
       if (!data || data === '[DONE]') continue
       try {
-        const p = JSON.parse(data)
-        const token: string = p?.choices?.[0]?.delta?.content ?? ''
+        const parsed = JSON.parse(data)
+        const token: string = parsed?.choices?.[0]?.delta?.content ?? ''
         if (token) yield token
-      } catch { /* skip */ }
+      } catch { /* skip malformed chunks */ }
     }
   }
 }
 
-// ── Supabase helpers ──────────────────────────────────────────────────────────
-
+// ── Supabase persistence helpers ──────────────────────────────────────────────
 async function createConversation(title: string): Promise<string | null> {
   try {
     // eslint-disable-next-line @typescript-eslint/no-explicit-any
@@ -88,9 +88,7 @@ async function createConversation(title: string): Promise<string | null> {
       .single()
     if (error) return null
     return data?.id ?? null
-  } catch {
-    return null
-  }
+  } catch { return null }
 }
 
 async function loadConversationMessages(conversationId: string): Promise<ChatMessage[]> {
@@ -108,44 +106,38 @@ async function loadConversationMessages(conversationId: string): Promise<ChatMes
       content: row.content,
       createdAt: new Date(row.created_at),
     }))
-  } catch {
-    return []
-  }
+  } catch { return [] }
 }
 
-// ── Mock fallback ─────────────────────────────────────────────────────────────
+// ── Mock fallback (no API key configured) ────────────────────────────────────
 const MOCK: Record<string, string> = {
-  'absent': 'Based on today\'s attendance data, the following members are on leave:\n\n• **Alice Johnson** — No check-in recorded\n• **Bob Smith** — On approved leave\n• **Carol White** — On leave without notification\n\nTotal on leave: 3 out of 12 team members.',
-  'attendance summary': '📊 **Attendance Summary — This Week**\n\nPresent: 9 members (75%)\nLate: 2 members (17%)\nOn Leave: 1 member (8%)\n\nOverall this week\'s attendance rate: **84.6%**',
-  'top performer': '🏆 **Top Performers — This Month**\n\n1. **David Lee** — 100% attendance\n2. **Emma Davis** — 98% attendance\n3. **Frank Wilson** — 96% attendance\n\nKeep up the great work! 🎉',
-  'trend': '📅 **Attendance Trend — Last 4 Weeks**\n\nWeek 1: 91% ▲\nWeek 2: 88% ▼\nWeek 3: 85% ▼\nWeek 4: 90% ▲\n\nAverage: **88.5%** — slightly below the 90% target.',
-  'below 75': '⚠️ **Members Below 75% Attendance**\n\n• **Carol White** — 68%\n• **Mike Brown** — 71%\n• **Sara Kim** — 73%\n\nPlease follow up with these team members.',
+  absent:             "Based on today's attendance data, the following members are on leave:\n\n• **Alice Johnson** — No check-in recorded\n• **Bob Smith** — On approved leave\n• **Carol White** — On leave without notification\n\nTotal on leave: 3 out of 12 team members.",
+  'attendance summary': "📊 **Attendance Summary — This Week**\n\nPresent: 9 members (75%)\nLate: 2 members (17%)\nOn Leave: 1 member (8%)\n\nOverall this week's attendance rate: **84.6%**",
+  'top performer':    "🏆 **Top Performers — This Month**\n\n1. **David Lee** — 100% attendance\n2. **Emma Davis** — 98% attendance\n3. **Frank Wilson** — 96% attendance\n\nKeep up the great work! 🎉",
+  trend:              "📅 **Attendance Trend — Last 4 Weeks**\n\nWeek 1: 91% \u25b2\nWeek 2: 88% \u25bc\nWeek 3: 85% \u25bc\nWeek 4: 90% \u25b2\n\nAverage: **88.5%** — slightly below the 90% target.",
+  'below 75':         "\u26a0\ufe0f **Members Below 75% Attendance**\n\n• **Carol White** — 68%\n• **Mike Brown** — 71%\n• **Sara Kim** — 73%\n\nPlease follow up with these team members.",
 }
 
 function getMockResponse(msg: string): string {
   const lower = msg.toLowerCase()
-  const key = Object.keys(MOCK).find(k => lower.includes(k))
-  return key
-    ? MOCK[key]
-    : `You asked: "${msg}"\n\nI'm running in demo mode. Add VITE_SUPABASE_URL and deploy the chat Edge Function to get real Mistral answers.`
+  const key   = Object.keys(MOCK).find(k => lower.includes(k))
+  return key ? MOCK[key] : `You asked: "${msg}"\n\nI'm running in demo mode. Add VITE_GROQ_API_KEY in .env.local to get real AI answers.`
 }
 
 async function* mockStream(text: string): AsyncGenerator<string> {
-  const words = text.split(' ')
-  for (const word of words) {
+  for (const word of text.split(' ')) {
     yield word + ' '
     await new Promise(r => setTimeout(r, 35))
   }
 }
 
 // ── Hook ──────────────────────────────────────────────────────────────────────
-
 export function useChat(initialConversationId?: string) {
-  const [messages, setMessages]         = useState<ChatMessage[]>([])
-  const [loading, setLoading]           = useState(false)
-  const [error, setError]               = useState<string | null>(null)
-  const [conversationId, setConvId]     = useState<string | null>(initialConversationId ?? null)
-  const abortRef                        = useRef<AbortController | null>(null)
+  const [messages, setMessages]     = useState<ChatMessage[]>([])
+  const [loading, setLoading]       = useState(false)
+  const [error, setError]           = useState<string | null>(null)
+  const [conversationId, setConvId] = useState<string | null>(initialConversationId ?? null)
+  const abortRef                    = useRef<AbortController | null>(null)
 
   const updateLast = useCallback((patch: Partial<ChatMessage>) => {
     setMessages(prev => {
@@ -157,7 +149,6 @@ export function useChat(initialConversationId?: string) {
     })
   }, [])
 
-  /** Load an existing conversation from Supabase */
   const loadConversation = useCallback(async (id: string) => {
     setConvId(id)
     const msgs = await loadConversationMessages(id)
@@ -169,118 +160,102 @@ export function useChat(initialConversationId?: string) {
     if (!text || loading) return
     setError(null)
 
-    const userMsg: ChatMessage   = { id: uid(), role: 'user',      content: text,  createdAt: new Date() }
-    const assistantMsg: ChatMessage = { id: uid(), role: 'assistant', content: '',    streaming: true, createdAt: new Date() }
+    const userMsg: ChatMessage      = { id: uid(), role: 'user',      content: text, createdAt: new Date() }
+    const assistantMsg: ChatMessage = { id: uid(), role: 'assistant', content: '',   streaming: true, createdAt: new Date() }
 
     setMessages(prev => [...prev, userMsg, assistantMsg])
     setLoading(true)
-
-    const edgeUrl = getEdgeFunctionUrl()
+    abortRef.current = new AbortController()
 
     try {
-      if (edgeUrl) {
-        // ── Supabase Edge Function → Mistral streaming ────────────────────
-        abortRef.current = new AbortController()
+      const groqKey = import.meta.env.VITE_GROQ_API_KEY as string | undefined
 
-        // Ensure we have a conversation row for persistence
-        let convId = conversationId
-        if (!convId) {
-          convId = await createConversation(text.slice(0, 60))
-          if (convId) setConvId(convId)
+      const history = messages
+        .filter(m => m.content.length > 0 && !m.streaming)
+        .map(m => ({ role: m.role, content: m.content }))
+      history.push({ role: 'user', content: text })
+
+      // ── Debug command: type "debug db" to test Supabase connection ──────
+      if (text.toLowerCase() === 'debug db') {
+        const report = await debugDbConnection()
+        updateLast({ content: report })
+        return
+      }
+
+      if (groqKey) {
+        if (!conversationId) {
+          createConversation(text.slice(0, 60)).then(id => { if (id) setConvId(id) })
         }
 
-        // Build history (exclude empty/streaming placeholders)
-        const history = messages
-          .filter(m => m.content.length > 0 && !m.streaming)
-          .map(m => ({ role: m.role, content: m.content }))
-        history.push({ role: 'user', content: text })
+        // 1. Check intent instantly (no DB call) to know if this is a data question
+        const isDataQuestion = hasDataIntent(text)
 
-        // Get user JWT for RLS
-        const { data: { session } } = await supabase.auth.getSession()
-        const headers: Record<string, string> = {
-          'Content-Type': 'application/json',
-          'apikey': import.meta.env.VITE_SUPABASE_ANON_KEY as string ?? '',
+        // 2. If it's a data question, fetch from Supabase with 10s timeout
+        let dbSummary: string | null = null
+        if (isDataQuestion) {
+          try {
+            const dbCtx = await withTimeout(
+              resolveDbContext(text),
+              10000,
+              { fetched: false, hadIntent: true, summary: '' },
+            )
+            dbSummary = dbCtx.fetched ? dbCtx.summary : null
+            console.log('[chat] DB fetched:', dbCtx.fetched, '| summary length:', dbCtx.summary?.length)
+          } catch (err) {
+            console.error('[chat] DB error:', err)
+          }
         }
-        if (session?.access_token) headers['Authorization'] = `Bearer ${session.access_token}`
 
-        const res = await fetch(edgeUrl, {
-          method: 'POST',
-          headers,
-          body: JSON.stringify({ messages: history, conversation_id: convId }),
-          signal: abortRef.current.signal,
-        })
-        
-        // If Edge Function not deployed (404) or other error, fall back to direct Mistral
-        if (!res.ok) {
-          const mistralKey = import.meta.env.VITE_MISTRAL_API_KEY as string | undefined
-          if (mistralKey && res.status === 404) {
-            console.warn('Edge Function not deployed (404), falling back to Mistral')
+        // 3. Build history — inject DB data if available, or a clear error if DB failed
+        let historyWithCtx: { role: string; content: string }[]
+        if (isDataQuestion && dbSummary) {
+          historyWithCtx = [
+            ...history.slice(0, -1),
+            {
+              role: 'user' as const,
+              content: `--- LIVE TEAM DATA ---\n${dbSummary}\n--- END DATA ---\n\n${text}`,
+            },
+          ]
+        } else if (isDataQuestion && !dbSummary) {
+          historyWithCtx = [
+            ...history.slice(0, -1),
+            {
+              role: 'user' as const,
+              content: `--- LIVE TEAM DATA ---\nCould not fetch data from the database right now.\n--- END DATA ---\n\n${text}`,
+            },
+          ]
+        } else {
+          historyWithCtx = history
+        }
+
+        try {
+          let acc = ''
+          for await (const token of streamGroq(groqKey, historyWithCtx)) {
+            if (abortRef.current?.signal.aborted) break
+            acc += token
+            updateLast({ content: acc })
+          }
+        } catch (e) {
+          const msg = e instanceof Error ? e.message : ''
+          if (msg === 'RATE_LIMITED') {
+            console.warn('Groq rate limited, using mock responses')
+            const response = getMockResponse(text)
             let acc = ''
-            for await (const token of streamMistralDirect(mistralKey, history)) {
-              acc += token
+            for await (const chunk of mockStream(response)) {
+              acc += chunk
               updateLast({ content: acc })
             }
           } else {
-            throw new Error(`Edge Function error ${res.status}: ${await res.text()}`)
-          }
-        } else {
-          // Parse SSE stream from Edge Function
-          const reader  = res.body!.getReader()
-          const decoder = new TextDecoder()
-          let acc = ''
-          outer: while (true) {
-            const { done, value } = await reader.read()
-            if (done) break
-            const chunk = decoder.decode(value, { stream: true })
-            for (const line of chunk.split('\n')) {
-              if (!line.startsWith('data: ')) continue
-              const data = line.slice(6).trim()
-              if (data === '[DONE]') break outer
-              try {
-                const p = JSON.parse(data)
-                acc += p?.content ?? ''
-                updateLast({ content: acc })
-              } catch { /* skip */ }
-            }
+            throw e
           }
         }
       } else {
-        // ── Direct Mistral (dev shortcut — VITE_MISTRAL_API_KEY set) ───────
-        const mistralKey = import.meta.env.VITE_MISTRAL_API_KEY as string | undefined
-        if (mistralKey) {
-          try {
-            const history = messages
-              .filter(m => m.content.length > 0 && !m.streaming)
-              .map(m => ({ role: m.role, content: m.content }))
-            history.push({ role: 'user', content: text })
-            let acc = ''
-            for await (const token of streamMistralDirect(mistralKey, history)) {
-              acc += token
-              updateLast({ content: acc })
-            }
-          } catch (e) {
-            // If rate limited or error, fall back to mock
-            const msg = e instanceof Error ? e.message : ''
-            if (msg.includes('RATE_LIMITED') || msg.includes('429')) {
-              console.warn('Mistral rate limited, using mock responses')
-              const response = getMockResponse(text)
-              let acc = ''
-              for await (const chunk of mockStream(response)) {
-                acc += chunk
-                updateLast({ content: acc })
-              }
-            } else {
-              throw e
-            }
-          }
-        } else {
-          // ── Mock streaming (no keys configured) ────────────────────────
-          const response = getMockResponse(text)
-          let acc = ''
-          for await (const chunk of mockStream(response)) {
-            acc += chunk
-            updateLast({ content: acc })
-          }
+        const response = getMockResponse(text)
+        let acc = ''
+        for await (const chunk of mockStream(response)) {
+          if (abortRef.current?.signal.aborted) break
+          acc += chunk
+          updateLast({ content: acc })
         }
       }
     } catch (e: unknown) {

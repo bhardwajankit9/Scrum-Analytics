@@ -32,33 +32,69 @@ export class SupabaseScrumSessionRepository implements IScrumSessionRepository {
     endTime: string
   ): Promise<void> {
     const durationMinutes = this.calculateDuration(startTime, endTime)
+    const maxRetries = 3
+    let lastError: Error | null = null
 
-    const { error } = await supabase
-      .from('scrum_sessions')
-      .upsert(
-        {
-          project_id: projectId,
-          session_date: sessionDate,
-          scrum_start_time: startTime,
-          scrum_end_time: endTime,
-          duration_minutes: durationMinutes,
-        },
-        { onConflict: 'project_id,session_date' }
-      )
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const { error } = await supabase
+          .from('scrum_sessions')
+          .upsert(
+            {
+              project_id: projectId,
+              session_date: sessionDate,
+              scrum_start_time: startTime,
+              scrum_end_time: endTime,
+              duration_minutes: durationMinutes,
+            },
+            { onConflict: 'project_id,session_date' }
+          )
 
-    if (error) throw new Error(`Failed to save scrum session: ${error.message}`)
+        if (error) throw new Error(`Failed to save scrum session: ${error.message}`)
+        return
+      } catch (err) {
+        lastError = err as Error
+        if (lastError.message.includes('Lock') || lastError.message.includes('AbortError')) {
+          if (attempt < maxRetries - 1) {
+            await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+            continue
+          }
+        }
+        throw lastError
+      }
+    }
+
+    throw lastError || new Error('Failed to save scrum session after retries')
   }
 
   async getScrumSessionsByProject(projectId: string, limit: number = 10): Promise<ScrumSessionRow[]> {
-    const { data, error } = await supabase
-      .from('scrum_sessions')
-      .select('*')
-      .eq('project_id', projectId)
-      .order('session_date', { ascending: false })
-      .limit(limit)
+    const maxRetries = 3
+    let lastError: Error | null = null
 
-    if (error) throw new Error(`Failed to get scrum sessions: ${error.message}`)
-    return data || []
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const { data, error } = await supabase
+          .from('scrum_sessions')
+          .select('*')
+          .eq('project_id', projectId)
+          .order('session_date', { ascending: false })
+          .limit(limit)
+
+        if (error) throw new Error(`Failed to get scrum sessions: ${error.message}`)
+        return data || []
+      } catch (err) {
+        lastError = err as Error
+        if (lastError.message.includes('Lock') || lastError.message.includes('AbortError')) {
+          if (attempt < maxRetries - 1) {
+            await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+            continue
+          }
+        }
+        throw lastError
+      }
+    }
+
+    throw lastError || new Error('Failed to get scrum sessions after retries')
   }
 
   private calculateDuration(startTime: string, endTime: string): number {
@@ -79,33 +115,71 @@ export class SupabaseAttendanceRuleRepository implements IAttendanceRuleReposito
     gracePeriodMinutes: number,
     timezone: string
   ): Promise<void> {
-    const { error } = await supabase
-      .from('attendance_rules')
-      .upsert(
-        {
-          project_id: projectId,
-          default_scrum_start_time: defaultStartTime,
-          default_scrum_end_time: defaultEndTime,
-          grace_period_minutes: gracePeriodMinutes,
-          timezone,
-        },
-        { onConflict: 'project_id' }
-      )
+    const maxRetries = 3
+    let lastError: Error | null = null
 
-    if (error) throw new Error(`Failed to save attendance rule: ${error.message}`)
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const { error } = await supabase
+          .from('attendance_rules')
+          .upsert(
+            {
+              project_id: projectId,
+              default_scrum_start_time: defaultStartTime,
+              default_scrum_end_time: defaultEndTime,
+              grace_period_minutes: gracePeriodMinutes,
+              timezone,
+            },
+            { onConflict: 'project_id' }
+          )
+
+        if (error) throw new Error(`Failed to save attendance rule: ${error.message}`)
+        return
+      } catch (err) {
+        lastError = err as Error
+        if (lastError.message.includes('Lock') || lastError.message.includes('AbortError')) {
+          if (attempt < maxRetries - 1) {
+            await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+            continue
+          }
+        }
+        throw lastError
+      }
+    }
+
+    throw lastError || new Error('Failed to save attendance rule after retries')
   }
 
   async getAttendanceRuleByProject(projectId: string): Promise<AttendanceRuleRow | null> {
-    const { data, error } = await supabase
-      .from('attendance_rules')
-      .select('*')
-      .eq('project_id', projectId)
-      .single()
+    const maxRetries = 3
+    let lastError: Error | null = null
 
-    if (error && error.code !== 'PGRST116') {
-      throw new Error(`Failed to get attendance rule: ${error.message}`)
+    for (let attempt = 0; attempt < maxRetries; attempt++) {
+      try {
+        const { data, error } = await supabase
+          .from('attendance_rules')
+          .select('*')
+          .eq('project_id', projectId)
+          .single()
+
+        if (error && error.code !== 'PGRST116') {
+          throw new Error(`Failed to get attendance rule: ${error.message}`)
+        }
+        return data || null
+      } catch (err) {
+        lastError = err as Error
+        // If it's a lock error, wait and retry; otherwise fail immediately
+        if (lastError.message.includes('Lock') || lastError.message.includes('AbortError')) {
+          if (attempt < maxRetries - 1) {
+            await new Promise(resolve => setTimeout(resolve, 100 * (attempt + 1)))
+            continue
+          }
+        }
+        throw lastError
+      }
     }
-    return data || null
+
+    throw lastError || new Error('Failed to get attendance rule after retries')
   }
 }
 
